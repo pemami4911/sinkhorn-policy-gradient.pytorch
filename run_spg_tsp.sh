@@ -1,0 +1,41 @@
+#!/bin/bash
+MODEL='ddpg'
+N_NODES=10
+COP="tsp_$N_NODES"
+ARCH='rnn'
+RANDOM_SEED=$1
+RUN_NUM=$2
+RUN_NAME="tsp-test-$RANDOM_SEED$RUN_NUM"
+TRAIN_SIZE=500000
+VAL_SIZE=1000
+USE_BATCHNORM='False'
+PARALLEL_ENVS=128
+BATCH_SIZE=2000
+N_FEATURES=2
+HIDDEN_DIM=300
+ACTOR_LR=1e-4 # 3e-5
+CRITIC_LR=1e-3 # 7e-4
+ACTOR_LR_DECAY_RATE=0.9
+CRITIC_LR_DECAY_RATE=0.9
+ACTOR_LR_DECAY_STEP=10000
+CRITIC_LR_DECAY_STEP=10000
+N_EPOCHS=30
+EPSILON=1
+EPSILON_DECAY_RATE=0.97
+EPSILON_DECAY_STEP=500000
+POISSON_LAMBDA=3
+POISSON_DECAY_RATE=0.97
+POISSON_DECAY_STEP=500000
+BUFFER_SIZE=1000000
+SINKHORN_TAU=1
+SINKHORN_ITERS=5
+ID=1203913043
+SAVE_STATS='False'
+SAVE_MODEL='False'
+DISABLE_TENSORBOARD='False'
+EMBEDDING_DIM=128
+LSTM_HIDDEN=128
+N_LAYERS=6
+
+python train_spg.py --task $COP --arch $ARCH --train_size $TRAIN_SIZE --val_size $VAL_SIZE --batch_size $BATCH_SIZE --n_nodes $N_NODES --n_features $N_FEATURES --hidden_dim $HIDDEN_DIM --random_seed $RANDOM_SEED --run_name $RUN_NAME --disable_tensorboard $DISABLE_TENSORBOARD --actor_lr $ACTOR_LR --critic_lr $CRITIC_LR --n_epochs $N_EPOCHS --poisson_decay_rate $POISSON_DECAY_RATE --poisson_decay_step $POISSON_DECAY_STEP --buffer_size $BUFFER_SIZE --epsilon $EPSILON --epsilon_decay_rate $EPSILON_DECAY_RATE --epsilon_decay_step $EPSILON_DECAY_STEP --_id $ID --sinkhorn_iters $SINKHORN_ITERS --sinkhorn_tau $SINKHORN_TAU --save_stats $SAVE_STATS --embedding_dim $EMBEDDING_DIM --lstm_dim $LSTM_HIDDEN --n_layers $N_LAYERS --actor_lr_decay_rate $ACTOR_LR_DECAY_RATE --actor_lr_decay_step $ACTOR_LR_DECAY_STEP --critic_lr_decay_rate $CRITIC_LR_DECAY_RATE --critic_lr_decay_step $CRITIC_LR_DECAY_STEP --poisson_lambda $POISSON_LAMBDA --save_model $SAVE_MODEL --parallel_envs $PARALLEL_ENVS
+
