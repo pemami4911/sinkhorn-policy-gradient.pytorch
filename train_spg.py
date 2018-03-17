@@ -51,7 +51,6 @@ parser.add_argument('--alpha', type=float, default=0.9)
 parser.add_argument('--alpha_decay_rate', type=float, default=0.9)
 parser.add_argument('--alpha_decay_step', type=int, default=500000)
 parser.add_argument('--use_batchnorm', type=util.str2bool, default=True)
-parser.add_argument('--use_layer_norm', type=util.str2bool, default=False)
 parser.add_argument('--actor_lr', type=float, default=3e-4)
 parser.add_argument('--critic_lr', type=float, default=3e-4)
 parser.add_argument('--actor_lr_decay_rate', type=float, default=0.9)
@@ -140,9 +139,9 @@ def evaluate_model(args, count):
         elif args['arch'] == 'siamese':
             actor = SPGSiameseActor(args['n_features'], args['n_nodes'], args['embedding_dim'],
                 args['lstm_dim'], args['sinkhorn_iters'],  args['sinkhorn_tau'], args['alpha'],
-                args['use_cuda'], args['disable_lstm_siamese'], args['use_layer_norm'])
+                args['use_cuda'], args['disable_lstm_siamese'])
             critic = SPGSiameseCritic(args['n_features'], args['n_nodes'], args['embedding_dim'],
-            args['lstm_dim'], args['use_cuda'], args['use_layer_norm'])
+            args['lstm_dim'], args['use_cuda'])
     args['save_dir'] = os.path.join('results', 'models', args['COP'], 'spg', args['arch'], args['_id'])    
     try:
         os.makedirs(args['save_dir'])
@@ -154,8 +153,10 @@ def evaluate_model(args, count):
         critic = critic.cuda()
 
     # Optimizers
-    actor_optim = optim.RMSprop(actor.parameters(), lr=args['actor_lr'], momentum=0.9, weight_decay=1e-4)
-    critic_optim = optim.RMSprop(critic.parameters(), lr=args['critic_lr'], momentum=0.9, weight_decay=args['critic_weight_decay'])
+    #actor_optim = optim.RMSprop(actor.parameters(), lr=args['actor_lr'], momentum=0.9)
+    #critic_optim = optim.RMSprop(critic.parameters(), lr=args['critic_lr'], momentum=0.9, weight_decay=args['critic_weight_decay'])
+    actor_optim = optim.Adam(actor.parameters(), lr=args['actor_lr'])
+    critic_optim = optim.Adam(critic.parameters(), lr=args['critic_lr'], weight_decay=args['critic_weight_decay'])
     critic_loss = torch.nn.MSELoss()
 
     if args['use_cuda']:
@@ -234,7 +235,7 @@ def evaluate_model(args, count):
             obs = Variable(obs, requires_grad=False)
             if args['use_cuda']:
                 obs = obs.cuda()
-            _, action, X, dist = actor(obs)
+            _,  action, _, dist = actor(obs)
     
             if args['COP'] == 'sort' or args['COP'] == 'tsp':
                 # apply the permutation to the input
@@ -285,6 +286,10 @@ def evaluate_model(args, count):
 
     for i in range(epoch, epoch + args['n_epochs']):
         eval_step = eval(eval_step)
+        if args['save_model']:
+            print(' [*] saving model...')
+            torch.save(actor, os.path.join(args['save_dir'], 'actor-epoch-{}.pt'.format(i+1)))
+            torch.save(critic, os.path.join(args['save_dir'], 'critic-epoch-{}.pt'.format(i+1)))  
         actor.train()
         critic.train()
         for obs in tqdm(training_dataloader, disable=args['disable_progress_bar']):
@@ -294,7 +299,7 @@ def evaluate_model(args, count):
             obs = Variable(obs, requires_grad=False)
             if args['use_cuda']:
                 obs = obs.cuda()
-            _, action, X, dist = actor(obs)
+            psi, action, X, dist = actor(obs)
             # do epsilon greedy exploration
             if np.random.rand() < epsilon:
                 # Add noise in the form of 2-exchange neighborhoods
@@ -329,48 +334,6 @@ def evaluate_model(args, count):
                 # concat result 
                 R = env(matchings, args['use_cuda'])
             
-            #Find the action corresponding to the max reward.
-            #Generate all actions in the 2-exchange neighborhood
-            # _, max_idx = torch.topk(R, 3, 0)
-            # _, min_idx = torch.topk(R, 3, 0, largest=False)
-            # idxs = [max_idx, min_idx]
-            # for ii in range(2):
-            #     best_state = obs[idxs[ii].squeeze()] 
-            #     best_action = action[idxs[ii].squeeze()]
-            #     new_actions = []
-            #     new_states = []
-            #     for n1 in range(args['n_nodes']):
-            #         for n2 in range(args['n_nodes']):
-            #             if n1 == n2:
-            #                 continue
-            #             new_action = best_action.clone()
-            #             # swap the two rows
-            #             tmp = new_action[:,n1].clone()
-            #             tmp2 = new_action[:,n2].clone()
-            #             new_action[:,n1] = tmp2
-            #             new_action[:,n2] = tmp
-            #             new_actions.append(new_action)
-            #             new_states.append(best_state.clone())
-               
-            #     best_states = torch.stack(new_states).squeeze().view((args['n_nodes'] ** 2 - args['n_nodes']) * 3, 2 * args['n_nodes'], 2)
-            #     best_actions = torch.stack(new_actions).squeeze().view((args['n_nodes'] ** 2 - args['n_nodes']) * 3, args['n_nodes'], args['n_nodes'])
-            #     if args['COP'] == 'sort' or args['COP'] == 'tsp':
-            #         # apply the permutation to the input
-            #         solutions = torch.matmul(torch.transpose(best_states, 1, 2), best_actions)
-            #         if args['n_features'] > 1:
-            #             solutions = torch.transpose(solutions, 1, 2)
-            #         best_rewards = env(solutions, args['use_cuda'])
-            #     elif args['COP'] == 'mwm2D':
-            #         matchings = torch.matmul(torch.transpose(best_states[:,args['n_nodes']:2*args['n_nodes'],:], 1, 2), best_actions)
-            #         matchings = torch.transpose(matchings, 1, 2)               
-            #         matchings = torch.cat([best_states[:,0:args['n_nodes'],:], matchings], dim=1)
-            #         best_rewards = env(matchings, args['use_cuda'])
-               
-            #     # concat 
-            #     R = torch.cat([R, best_rewards])
-            #     action = torch.cat([action, best_actions])
-            #     obs = torch.cat([obs, best_states])
-
             running_avg_R.append(copy.copy(R.data.cpu().numpy()))
             running_avg_bd.append(copy.copy(dist.data.cpu().numpy()))
             if args['save_stats']: 
@@ -398,6 +361,7 @@ def evaluate_model(args, count):
                 log_value('Action exploration Lambda', poisson_lambda, train_step)
 
             replay_buffer.store(obs.data, action.data, R.data)
+            #residual_loss = action_residual_loss((psi + resid).view(-1), action.view(-1))
             
             # sample from replay buffer if possible
             if replay_buffer.size() > args['batch_size']:
@@ -409,18 +373,15 @@ def evaluate_model(args, count):
                 # Compute Q(s_t, mu(s_t)=a_t)
                 # size is [batch_size, 1]
                 # N.B. We use the actions from the replay buffer to update the critic
-                Q = critic(s_batch_t, a_batch_t).squeeze(2) 
+                
+                #action_smoother = Variable(torch.from_numpy(np.random.gumbel(loc=0.0, scale=0.1, size=(args['n_nodes'], args['n_nodes']))).float(), requires_grad=False)
+                #if args['use_cuda']:
+                #    action_smoother = action_smoother.cuda()
+                # a_batch_t are the hard permutations
+                #Q = critic(s_batch_t, a_batch_t + action_smoother).squeeze(2) 
+                Q = critic(s_batch_t, a_batch_t).squeeze(2)
                 # compute and apply critic loss
                 critic_out = critic_loss(Q, targets)
-                # if train_step % 20 == 0:
-                #     # output the top 3 pairs with highest error
-                #     err = torch.abs(Q - targets)
-                #     td_worst_vals, td_worst_ids = torch.topk(err, 5, 0)
-                #     td_best_vals, td_best_ids = torch.topk(err, 5, 0, largest=False)
-                #     print('Worst Qs: {}, targets: {}, errs: {}'.format(
-                #         Q[td_worst_ids.squeeze()].data[0], targets[td_worst_ids.squeeze()].data[0], td_worst_vals.data[0]))
-                #     print('Best Qs: {}, targets: {}, errs: {}'.format(
-                #         Q[td_best_ids.squeeze()].data[0], targets[td_best_ids.squeeze()].data[0], td_best_vals.data[0]))
                 critic_optim.zero_grad()                
                 critic_out.backward()
                 # clip gradient norms
@@ -429,24 +390,23 @@ def evaluate_model(args, count):
                 critic_optim.step()
                 critic_scheduler.step()                 
                 
-                #if i > start_actor_training:
                 critic_optim.zero_grad()      
-                # actor(s)
                 actor_optim.zero_grad()
-                _, _, X, _ = actor(s_batch_t, do_round=False) 
-                #X += 1e-10
+                soft_action, _, _, _ = actor(s_batch_t, do_round=False) 
+                #soft_action += 1e-10
                 # N.B. we use the action just computed from the actor net here, which 
                 # will be used to compute the actor gradients
                 # compute gradient of critic network w.r.t. actions, grad Q_a(s,a)
-                #critic_action_grad = torch.autograd.grad(critic(obs, X).squeeze(2).split(1), X, retain_graph=True)
+                #critic_action_grad = torch.autograd.grad(critic(s_batch_t, soft_action).squeeze(2).split(1), soft_action, retain_graph=True)
                 # compute gradient of actor network w.r.t. parameters, grad mu_theta(s; theta) * critic_action_gradient
-                #torch.autograd.backward(X, critic_action_grad)
-                actor_loss = -critic(s_batch_t, X).squeeze(2).mean()
+                #torch.autograd.backward(soft_action, critic_action_grad)
+                actor_loss = -critic(s_batch_t, soft_action).squeeze(2).mean()
                 actor_loss.backward()
 
                 # clip gradient norms
                 torch.nn.utils.clip_grad_norm(actor.parameters(),
                     args['max_grad_norm'], norm_type=2)
+
                 actor_optim.step()
                 actor_scheduler.step()
 
@@ -454,15 +414,15 @@ def evaluate_model(args, count):
                     log_value('actor loss', actor_loss.data[0], train_step)
                     log_value('critic loss', critic_out.data[0], train_step)
                     log_value('avg Q', Q.mean().data[0], train_step)  
-            
+
             train_step += 1
-        if args['save_model']:
-            print(' [*] saving model...')
-            torch.save(actor, os.path.join(args['save_dir'], 'actor-epoch-{}.pt'.format(i+1)))
-            torch.save(critic, os.path.join(args['save_dir'], 'critic-epoch-{}.pt'.format(i+1)))  
         
     # Eval one last time
     eval_step = eval(eval_step)
+    if args['save_model']:
+        print(' [*] saving model...')
+        torch.save(actor, os.path.join(args['save_dir'], 'actor-epoch-{}.pt'.format(i+1)))
+        torch.save(critic, os.path.join(args['save_dir'], 'critic-epoch-{}.pt'.format(i+1)))  
     if args['save_stats']:
         # write training stats to file
         json.dump(scores, fglab_results)

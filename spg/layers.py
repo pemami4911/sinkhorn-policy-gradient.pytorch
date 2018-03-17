@@ -4,6 +4,7 @@ from torch.nn.modules.module import Module
 from torch.autograd import Variable
 import torch.nn.functional as F
 from spg.hungarian import Hungarian
+import numpy as np
 
 class Sinkhorn(Module):
     """
@@ -16,13 +17,14 @@ class Sinkhorn(Module):
         super(Sinkhorn, self).__init__()
         self.n_nodes = n_nodes
         self.ones = Variable(torch.ones(n_nodes, 1), requires_grad=False)
-        self.eps = 1e-6 * torch.eye(self.n_nodes)
+        self.eps = 1e-7 * torch.eye(self.n_nodes)
         self.eps = Variable(self.eps, requires_grad=False)
         self.tau = tau
         self.sinkhorn_iters = sinkhorn_iters
         if cuda:
             self.ones = self.ones.cuda()
             self.eps = self.eps.cuda()
+        self.use_cuda = cuda
 
     def cuda_after_load(self):
         self.ones = self.ones.cuda()
@@ -44,6 +46,10 @@ class Sinkhorn(Module):
         return torch.div(x, y)
 
     def forward(self, x):
+        #smoother = Variable(torch.from_numpy(np.random.gumbel(0, 0.1, (self.n_nodes, self.n_nodes))).float(), requires_grad=False)
+        #if self.use_cuda:
+        #    smoother = smoother.cuda()
+        #x += smoother
         x = self.exp(x / self.tau)
         x = torch.add(x, self.eps)
         for _ in range(self.sinkhorn_iters):

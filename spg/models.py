@@ -60,7 +60,7 @@ class SPGMLPActor(nn.Module):
             X = ((1 - self.alpha) * perms) + self.alpha * psi 
             return psi, perms, X, dist
         else:
-            return None, None, psi, None
+            return psi, None, None, None
 
 class SPGReservoirActor(nn.Module):
     """
@@ -79,16 +79,19 @@ class SPGReservoirActor(nn.Module):
         self.n_layers = n_layers
         self.embedding = nn.Linear(n_features, embedding_dim)
         self.lstm_layers = [nn.LSTM(embedding_dim, lstm_dim) for _ in range(n_layers)]
-        self.fc1 = nn.Linear(self.lstm_dim, embedding_dim)
-        self.fc2 = nn.Linear(self.embedding_dim, n_nodes)
+        #self.lstm = nn.LSTM(embedding_dim, lstm_dim, num_layers=n_layers)
+        self.fc1 = nn.Linear(self.lstm_dim, n_nodes)
+        #self.fc2 = nn.Linear(self.n_nodes, n_nodes)
         self.sinkhorn = Sinkhorn(n_nodes, sinkhorn_iters, sinkhorn_tau, cuda)
         self.round = linear_assignment
         init_hx = Variable(torch.zeros(1, self.lstm_dim), requires_grad=False)
         init_cx = Variable(torch.zeros(1, self.lstm_dim), requires_grad=False)
+        for l in self.lstm_layers:
+            for p in l.parameters():
+                p.requires_grad = False
         if cuda:
             init_hx = init_hx.cuda()
             init_cx = init_cx.cuda()
-            #self.lstm[0] = self.lstm[0].cuda()
             for l in self.lstm_layers:
                 l = l.cuda()
         self.init_state = (init_hx, init_cx)
@@ -97,7 +100,7 @@ class SPGReservoirActor(nn.Module):
         """
         x is [batch_size, n_nodes, num_features]
         """
-        (batch_size, _, n_features) = x.size()
+        batch_size = x.size()[0]
         x = F.leaky_relu(self.embedding(x))
         x = torch.transpose(x, 0, 1)
         (init_hx, init_cx) = self.init_state
@@ -106,12 +109,14 @@ class SPGReservoirActor(nn.Module):
         hidden_state = (init_h, init_c)
         for lstm in self.lstm_layers:
             h_last, hidden_state = lstm(x, hidden_state)
+        #h_last, hidden_state = self.lstm(x, hidden_state)
         # h_last should be [n_nodes, batch_size, decoder_dim]
         x = torch.transpose(h_last, 0, 1)
         # transform to [batch_size, n_nodes, n_nodes]
-        x = F.leaky_relu(self.fc1(x))
-        M = self.fc2(x)
+        #x = F.leaky_relu(self.fc1(x))
+        M = self.fc1(x)
         psi = self.sinkhorn(M)
+        #r = self.fc2(psi.detach())
         if do_round:
             perms = []
             batch = psi.data.cpu().numpy()
@@ -127,21 +132,19 @@ class SPGReservoirActor(nn.Module):
             X = ((1 - self.alpha) * perms) + self.alpha * psi
             return psi, perms, X, dist
         else:
-            return None, None, psi, None
+            return psi, None, None, None
 
 class SPGSiameseActor(nn.Module):
     def __init__(self, n_features, n_nodes, embedding_dim, lstm_dim,
             sinkhorn_iters=5, sinkhorn_tau=1., alpha=1., cuda=True,
-            disable_lstm=False, use_layer_norm=False):
+            disable_lstm=False):
         super(SPGSiameseActor, self).__init__()
         self.use_cuda = cuda
         self.n_nodes = n_nodes
         self.lstm_dim = lstm_dim
-        self.use_layer_norm = use_layer_norm
         self.alpha = alpha
         self.disable_lstm = disable_lstm
         self.embedding = nn.Linear(n_features, embedding_dim)
-        self.ln = LayerNorm(n_nodes)
         # removed embedding_bn
         self.lstm = nn.LSTM(n_nodes, lstm_dim)
         self.fc1 = nn.Linear(self.lstm_dim, n_nodes)
@@ -167,32 +170,26 @@ class SPGSiameseActor(nn.Module):
         """
         x is [batch_size, 2 * n_nodes, num_features]
         """
-        (batch_size, _, n_features) = x.size()
+        batch_size= x.size()[0]
         # split x into G1 and G2
         g1 = x[:,0:self.n_nodes,:]
         g2 = x[:,self.n_nodes:2*self.n_nodes,:]
         g1 = self.embedding(g1)
         g2 = self.embedding(g2)
-        if self.use_layer_norm:
-            g1 = self.ln(g1)
-            g2 = self.ln(g2)
         g1 = F.leaky_relu(g1)
         g2 = F.leaky_relu(g2)
         # take outer product, result is [batch_size, N, N]
         x = torch.bmm(g2, torch.transpose(g1, 2, 1))
-        if not self.disable_lstm:
-            x = torch.transpose(x, 0, 1)
-            (init_hx, init_cx) = self.init_state
-            init_h = init_hx.unsqueeze(1).repeat(1, batch_size, 1)
-            init_c = init_cx.unsqueeze(1).repeat(1, batch_size, 1)
-            hidden_state = (init_h, init_c)
-            h, hidden_state = self.lstm(x, hidden_state)
-            # h is [n_nodes, batch_size, lstm_dim]
-            h = torch.transpose(h, 0, 1)
-            # result M is [batch_size, n_nodes, n_nodes]
-            M = self.fc1(h)
-        else:
-            M = x
+        x = torch.transpose(x, 0, 1)
+        (init_hx, init_cx) = self.init_state
+        init_h = init_hx.unsqueeze(1).repeat(1, batch_size, 1)
+        init_c = init_cx.unsqueeze(1).repeat(1, batch_size, 1)
+        hidden_state = (init_h, init_c)
+        h, hidden_state = self.lstm(x, hidden_state)
+        # h is [n_nodes, batch_size, lstm_dim]
+        h = torch.transpose(h, 0, 1)
+        # result M is [batch_size, n_nodes, n_nodes]
+        M = self.fc1(h)
         psi = self.sinkhorn(M)
         if do_round:
             perms = []
@@ -211,7 +208,7 @@ class SPGSiameseActor(nn.Module):
             X = ((1 - self.alpha) * perms) + self.alpha * psi
             return psi, perms, X, dist
         else:
-            return None, None, psi, None
+            return psi, None, None, None
 
 class SPGMLPCritic(nn.Module):
     def __init__(self, n_features, n_nodes, hidden_dim):
@@ -255,14 +252,19 @@ class SPGReservoirCritic(nn.Module):
         self.embeddingX = nn.Linear(n_features, embedding_dim)
         self.embeddingP = nn.Linear(n_nodes, embedding_dim)
         self.combine = nn.Linear(embedding_dim, embedding_dim)           
+        self.do = nn.Dropout(p=0.4)
         self.lstm_layers = [nn.LSTM(embedding_dim, lstm_dim) for _ in range(n_layers)]
+        #self.lstm = nn.LSTM(embedding_dim, lstm_dim, num_layers=n_layers)
         self.fc1 = nn.Linear(lstm_dim, 1)
         self.fc2 = nn.Linear(n_nodes, 1)
-        self.bn1 = nn.BatchNorm1d(n_nodes)
-        self.bn2 = nn.BatchNorm1d(n_nodes)
-        self.bn3 = nn.BatchNorm1d(n_nodes)
+        #self.bn1 = nn.BatchNorm1d(n_nodes)
+        #self.bn2 = nn.BatchNorm1d(n_nodes)
+        #self.bn3 = nn.BatchNorm1d(n_nodes)
         init_hx = Variable(torch.zeros(1, self.lstm_dim), requires_grad=False)
         init_cx = Variable(torch.zeros(1, self.lstm_dim), requires_grad=False)
+        for l in self.lstm_layers:
+            for p in l.parameters():
+                p.requires_grad = False
         if cuda:
             init_hx = init_hx.cuda()
             init_cx = init_cx.cuda()
@@ -274,10 +276,10 @@ class SPGReservoirCritic(nn.Module):
         """
         x is [batch_size, n_nodes, num_features]
         """
-        (batch_size, _, n_features) = x.size()
-        x = F.leaky_relu(self.bn1(self.embeddingX(x)))
-        p = F.leaky_relu(self.bn2(self.embeddingP(p)))
-        xp = F.leaky_relu(self.bn3(self.combine(x + p)))
+        batch_size = x.size()[0]
+        x = F.leaky_relu(self.embeddingX(x))
+        p = F.leaky_relu(self.embeddingP(p))
+        xp = self.do(self.combine(x + p))
         xp = torch.transpose(xp, 0, 1)
         (init_hx, init_cx) = self.init_state
         init_h = init_hx.unsqueeze(1).repeat(1, batch_size, 1)
@@ -285,6 +287,7 @@ class SPGReservoirCritic(nn.Module):
         hidden_state = (init_h, init_c)
         for lstm in self.lstm_layers:
             h_last, hidden_state = lstm(xp, hidden_state)
+        #h_last, hidden_state = self.lstm(xp, hidden_state)
         # h_last should be [n_nodes, batch_size, decoder_dim]
         x = torch.transpose(h_last, 0, 1)
         out = self.fc1(x)
@@ -293,25 +296,22 @@ class SPGReservoirCritic(nn.Module):
         return out
 
 class SPGSiameseCritic(nn.Module):
-    def __init__(self, n_features, n_nodes, embedding_dim, lstm_dim, cuda, use_layer_norm):
+    def __init__(self, n_features, n_nodes, embedding_dim, lstm_dim, cuda):
         super(SPGSiameseCritic, self).__init__()
         self.use_cuda = cuda
         self.n_nodes = n_nodes
         self.lstm_dim = lstm_dim
-        self.use_layer_norm = use_layer_norm
         self.embedding = nn.Linear(n_features, embedding_dim)
         self.embed_action = nn.Linear(n_nodes, embedding_dim)
-        #self.embedding_bn = nn.BatchNorm1d(n_nodes)
+        self.embedding_bn = nn.BatchNorm1d(n_nodes)
         self.lstm = nn.LSTM(n_nodes, lstm_dim)
         self.combine = nn.Linear(embedding_dim, n_nodes)
-        #self.bn1 = nn.BatchNorm1d(n_nodes)
+        self.bn1 = nn.BatchNorm1d(n_nodes)
+        self.bn2 = nn.BatchNorm1d(n_nodes)
         self.fc1 = nn.Linear(self.lstm_dim, embedding_dim)
+        self.fc11 = nn.Linear(embedding_dim, n_nodes)
         self.fc2 = nn.Linear(n_nodes, 1)
         self.fc3 = nn.Linear(n_nodes, 1)
-        self.ln1 = LayerNorm(n_nodes)
-        self.ln2 = LayerNorm(n_nodes)
-        self.ln3 = LayerNorm(n_nodes)
-        self.ln4 = LayerNorm(n_nodes)
         init_hx = Variable(torch.zeros(1, self.lstm_dim), requires_grad=False)
         init_cx = Variable(torch.zeros(1, self.lstm_dim), requires_grad=False)
         if cuda:
@@ -329,19 +329,17 @@ class SPGSiameseCritic(nn.Module):
         x is [batch_size, 2 * n_nodes, num_features]
         p is [batch_size, n_nodes, n_nodes]
         """
-        (batch_size, _, n_features) = x.size()
+        batch_size = x.size()[0]
         # split x into G1 and G2
         g1 = x[:,0:self.n_nodes,:]
         g2 = x[:,self.n_nodes:2*self.n_nodes,:]
-        g1 = self.embedding(g1)
-        g2 = self.embedding(g2)
-        if self.use_layer_norm:
-            g1 = self.ln1(g1)
-            g2 = self.ln1(g2)
-        g1 = F.leaky_relu(g1)
-        g2 = F.leaky_relu(g2)
+        g1 = F.leaky_relu(self.embedding(g1))
+        g2 = F.leaky_relu(self.embedding(g2))
+        #p = F.leaky_relu((self.embed_action(p)))
+        #g2p = g2 + p
         # take outer product, result is [batch_size, N, N]
         x = torch.bmm(g2, torch.transpose(g1, 2, 1))
+        x = F.leaky_relu(x)
         x = torch.transpose(x, 0, 1)
         (init_hx, init_cx) = self.init_state
         init_h = init_hx.unsqueeze(1).repeat(1, batch_size, 1)
@@ -350,18 +348,12 @@ class SPGSiameseCritic(nn.Module):
         h, hidden_state = self.lstm(x, hidden_state)
         # h is [n_nodes, batch_size, lstm_dim]
         x = torch.transpose(h, 0, 1)
-        # result is [batch_size, n_nodes, n_nodes]
-        x = self.fc1(x)
-        p = self.embed_action(p)        
-        if self.use_layer_norm:
-            x = self.ln2(x)
-            p = self.ln3(p)            
-        x = F.leaky_relu(x)
-        p = F.leaky_relu(p)
-        x = self.combine(x + p)
-        if self.use_layer_norm: 
-            x = self.ln4(x)       
-        x = F.leaky_relu(x)                
+        # result is [batch_size, n_nodes, embedding_dim]
+        ##x = F.leaky_relu(self.fc1(x))
+        ##x = F.leaky_relu(self.fc11(x))
+        x = F.leaky_relu(self.bn1(self.fc1(x)))
+        p = F.leaky_relu(self.embedding_bn(self.embed_action(p)))
+        x = F.leaky_relu(self.bn2(self.combine(x + p)))
         out = self.fc2(x)
         out = self.fc3(torch.transpose(out, 1, 2))
         # out is [batch_size, 1, 1]

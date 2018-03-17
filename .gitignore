@@ -1,5 +1,9 @@
+# Directories
 data/
 results/
 logs/
+.vscode/
+.ipynb_checkpoints/
 
+# Files
 *.pyc
