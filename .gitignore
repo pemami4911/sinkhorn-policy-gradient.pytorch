@@ -4,6 +4,7 @@ results/
 logs/
 .vscode/
 .ipynb_checkpoints/
+sigopt/
 
 # Files
 *.pyc

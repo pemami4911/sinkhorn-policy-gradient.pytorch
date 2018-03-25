@@ -32,10 +32,10 @@ def build(args, epoch, reset=False):
     elif args['COP'] == 'mwm2D':
         N = task[1]
         if not args['sl']:
-        #if args['model'] == 'ddpg' or args['model'] == 'nco':
+        #if args['model'] == 'spg' or args['model'] == 'nco':
         #    args['test_size'] = 0
             args['test_size'] = 0
-        elif args['model'] == 'ddpg' or args['model'] == 'nco':
+        elif args['model'] == 'spg' or args['model'] == 'nco':
             args['test_size'] = args['val_size']
         train_dir, val_dir, test_dir = mwm2D_task.create_dataset(
             args['train_size'],
@@ -70,7 +70,7 @@ def build(args, epoch, reset=False):
         training_dataset = tsp_task.TSPDataset(train_fname)
         if not reset:
             val_dataset = tsp_task.TSPDataset(val_fname)
-        if args['model'] == 'ddpg':
+        if args['model'] == 'spg':
             env = tsp_task.reward_spg
         elif args['model'] == 'nco':
             env = tsp_task.reward_nco

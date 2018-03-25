@@ -21,11 +21,9 @@ import torch.autograd as autograd
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
-
 from tensorboard_logger import configure, log_value, Logger
-
-from spg.models import SPGMLPActor, SPGReservoirActor, SPGSiameseActor
-from spg.models import SPGMLPCritic, SPGReservoirCritic, SPGSiameseCritic
+from spg.models import SPGMLPActor, SPGRNNActor, SPGSiameseActor
+from spg.models import SPGMLPCritic, SPGRNNCritic, SPGSiameseCritic
 from spg.replay_buffer import ReplayBuffer
 import spg.util as util
 
@@ -41,44 +39,39 @@ parser.add_argument('--batch_size', type=int, default=128)
 parser.add_argument('--train_size', type=int, default=500000)
 parser.add_argument('--val_size', type=int, default=10000)
 # Model cfg options here
-parser.add_argument('--n_features', type=int, default=1)
+parser.add_argument('--n_features', type=int, default=2)
 parser.add_argument('--n_nodes', type=int, default=10)
 parser.add_argument('--hidden_dim', type=int, default=128)
-parser.add_argument('--arch', type=str, default='fc')
+parser.add_argument('--arch', type=str, default='rnn')
 parser.add_argument('--sinkhorn_iters', type=int, default=10)
-parser.add_argument('--sinkhorn_tau', type=float, default=0.5)
-parser.add_argument('--alpha', type=float, default=0.9)
-parser.add_argument('--alpha_decay_rate', type=float, default=0.9)
-parser.add_argument('--alpha_decay_step', type=int, default=500000)
-parser.add_argument('--use_batchnorm', type=util.str2bool, default=True)
+parser.add_argument('--sinkhorn_tau', type=float, default=0.05)
+parser.add_argument('--alpha', type=float, default=1.)
 parser.add_argument('--actor_lr', type=float, default=3e-4)
 parser.add_argument('--critic_lr', type=float, default=3e-4)
-parser.add_argument('--actor_lr_decay_rate', type=float, default=0.9)
-parser.add_argument('--critic_lr_decay_rate', type=float, default=0.5)
-parser.add_argument('--actor_lr_decay_step', type=int, default=10000)
-parser.add_argument('--critic_lr_decay_step', type=int, default=2500)
-parser.add_argument('--critic_weight_decay', type=float, default=0.)
-parser.add_argument('--poisson_lambda', type=float, default=9.)
-parser.add_argument('--poisson_decay_rate', type=float, default=0.9)
-parser.add_argument('--poisson_decay_step', type=int, default=250000)
-parser.add_argument('--epsilon', type=float, default=0.9)
+parser.add_argument('--actor_lr_decay_rate', type=float, default=0.95)
+parser.add_argument('--critic_lr_decay_rate', type=float, default=0.95)
+parser.add_argument('--actor_lr_decay_step', type=int, default=50000)
+parser.add_argument('--critic_lr_decay_step', type=int, default=5000)
+parser.add_argument('--poisson_lambda', type=float, default=4)
+parser.add_argument('--poisson_decay_rate', type=float, default=0.95)
+parser.add_argument('--poisson_decay_step', type=int, default=500000)
+parser.add_argument('--epsilon', type=float, default=1.)
 parser.add_argument('--epsilon_decay_rate', type=float, default=0.97)
-parser.add_argument('--epsilon_decay_step', type=int, default=250000)
-parser.add_argument('--embedding_dim', type=int, default=64)
-parser.add_argument('--lstm_dim', type=int, default=256)
-parser.add_argument('--n_layers', type=int, default=1)
+parser.add_argument('--epsilon_decay_step', type=int, default=500000)
+parser.add_argument('--embedding_dim', type=int, default=128)
+parser.add_argument('--rnn_dim', type=int, default=128)
 # Training cfg options here
-parser.add_argument('--n_epochs', type=int, default=2)
+parser.add_argument('--n_epochs', type=int, default=10)
 parser.add_argument('--random_seed', type=int, default=1234)
 parser.add_argument('--max_grad_norm', type=float, default=1.0, help='Gradient clipping')
-parser.add_argument('--use_cuda', type=util.str2bool, default=True, help='')
-parser.add_argument('--buffer_size', type=int, default=1e5)
-parser.add_argument('--sl', type=util.str2bool, default=False)
-parser.add_argument('--use_graph', type=util.str2bool, default=False)
-parser.add_argument('--disable_lstm_siamese', type=util.str2bool, default=False)
-# Misc
+parser.add_argument('--buffer_size', type=int, default=1e6)
 parser.add_argument('--log_step', type=int, default=100, help='Log info every log_step steps')
+# CUDA
+parser.add_argument('--use_cuda', type=util.str2bool, default=True)
+parser.add_argument('--cuda_device', type=int, default=0)
+# Misc
 parser.add_argument('--run_name', type=str, default='0')
+parser.add_argument('--base_dir', type=str, default='/media/pemami/DATA/sinkhorn-pg/')
 parser.add_argument('--epoch_start', type=int, default=0, help='Restart at epoch #')
 parser.add_argument('--save_model', type=util.str2bool, default=False, help='Save after epoch')
 parser.add_argument('--save_stats', type=util.str2bool, default=True)
@@ -87,10 +80,8 @@ parser.add_argument('--critic_load_path', type=str, default='')
 parser.add_argument('--disable_tensorboard', type=util.str2bool, default=True)
 parser.add_argument('--disable_progress_bar', type=util.str2bool, default=False)
 parser.add_argument('--_id', type=str, default='123456789', help='FGLab experiment ID')
-parser.add_argument('--sigopt', type=util.str2bool, default=False)
 parser.add_argument('--num_workers', type=int, default=0)
 parser.add_argument('--make_only', type=int, default=3)
-parser.add_argument('--use_critic_reset', type=util.str2bool, default=False)
 
 Experience = namedtuple('Experience', ['state', 'action', 'reward'])
 
@@ -101,11 +92,13 @@ DEBUG = False
 ######################################### 
 
 def evaluate_model(args, count):
-        
-    # append last 6 digits of experiment id to run name
-    args['run_name'] = args['_id'][-6:] + '-' + args['run_name']
+    # Pretty print the run args
+    pp.pprint(args)
+    
     if not args['disable_tensorboard'] and count == 0:
-        configure(os.path.join('results', 'logs', args['task'], args['run_name']), flush_secs=2)
+        # append last 6 digits of experiment id to run name
+        args['run_name'] = args['_id'][-6:] + '-' + args['run_name']
+        configure(os.path.join(args['base_dir'], 'results', 'logs', args['task'], args['run_name']), flush_secs=2)
     
     task = args['task'].split('_')
     args['COP'] = task[0]  # the combinatorial optimization problem
@@ -127,22 +120,21 @@ def evaluate_model(args, count):
         # initialize RL model
         if args['arch'] == 'fc':
             actor = SPGMLPActor(args['n_features'], args['n_nodes'], args['hidden_dim'],
-                    args['use_cuda'], args['sinkhorn_iters'], args['sinkhorn_tau'], args['alpha'],
-                    args['use_batchnorm'])
+                    args['use_cuda'], args['sinkhorn_iters'], args['sinkhorn_tau'], args['alpha'])
             critic = SPGMLPCritic(args['n_features'], args['n_nodes'], args['hidden_dim'])
         elif args['arch'] == 'rnn':
-            actor = SPGReservoirActor(args['n_features'], args['n_nodes'], args['embedding_dim'],
-                    args['lstm_dim'], args['n_layers'], args['use_cuda'], args['sinkhorn_iters'],
-                    args['sinkhorn_tau'], args['alpha'])
-            critic = SPGReservoirCritic(args['n_features'], args['n_nodes'], args['embedding_dim'],
-                    args['lstm_dim'], args['n_layers'], args['use_cuda'])
+            actor = SPGRNNActor(args['n_features'], args['n_nodes'], args['embedding_dim'],
+                    args['rnn_dim'], args['sinkhorn_iters'],
+                    args['sinkhorn_tau'], args['alpha'], args['use_cuda'])
+            critic = SPGRNNCritic(args['n_features'], args['n_nodes'], args['embedding_dim'],
+                    args['rnn_dim'], args['use_cuda'])
         elif args['arch'] == 'siamese':
             actor = SPGSiameseActor(args['n_features'], args['n_nodes'], args['embedding_dim'],
-                args['lstm_dim'], args['sinkhorn_iters'],  args['sinkhorn_tau'], args['alpha'],
-                args['use_cuda'], args['disable_lstm_siamese'])
+                args['rnn_dim'], args['sinkhorn_iters'],  args['sinkhorn_tau'], args['alpha'],
+                args['use_cuda'])
             critic = SPGSiameseCritic(args['n_features'], args['n_nodes'], args['embedding_dim'],
-            args['lstm_dim'], args['use_cuda'])
-    args['save_dir'] = os.path.join('results', 'models', args['COP'], 'spg', args['arch'], args['_id'])    
+                args['rnn_dim'], args['use_cuda'])
+    args['save_dir'] = os.path.join(args['base_dir'], 'results', 'models', args['COP'], 'spg', args['arch'], args['_id'])    
     try:
         os.makedirs(args['save_dir'])
     except:
@@ -153,14 +145,14 @@ def evaluate_model(args, count):
         critic = critic.cuda()
 
     # Optimizers
-    #actor_optim = optim.RMSprop(actor.parameters(), lr=args['actor_lr'], momentum=0.9)
-    #critic_optim = optim.RMSprop(critic.parameters(), lr=args['critic_lr'], momentum=0.9, weight_decay=args['critic_weight_decay'])
     actor_optim = optim.Adam(actor.parameters(), lr=args['actor_lr'])
-    critic_optim = optim.Adam(critic.parameters(), lr=args['critic_lr'], weight_decay=args['critic_weight_decay'])
+    critic_optim = optim.Adam(critic.parameters(), lr=args['critic_lr'])
     critic_loss = torch.nn.MSELoss()
+    critic_aux_loss = torch.nn.MSELoss()
 
     if args['use_cuda']:
         critic_loss = critic_loss.cuda()
+        critic_aux_loss = critic_aux_loss.cuda()
 
     actor_scheduler = lr_scheduler.MultiStepLR(actor_optim,
         range(args['actor_lr_decay_step'], args['actor_lr_decay_step'] * 1000,
@@ -172,15 +164,16 @@ def evaluate_model(args, count):
     replay_buffer = ReplayBuffer(args['buffer_size'], args['random_seed'])
 
     if args['COP'] == 'mwm2D':
-        args['sl'] = True
+        args['sl'] = True # We use the matching soln from Hungarian alg
         # Task specific configuration - generate dataset if needed
         args, env, training_dataloader, validation_dataloader, test_dataloader = dataset.build(args, args['epoch_start'])
     else:
+        args['sl'] = False
         args, env, training_dataloader, validation_dataloader = dataset.build(args, args['epoch_start'])
     # Open files for writing results
     if args['save_stats']:
-        fglab_results_dir = os.path.join('results', 'fglab', args['model'], args['COP'], args['_id'])
-        raw_results_dir = os.path.join('results', 'raw', args['model'], args['COP'], args['_id'])
+        fglab_results_dir = os.path.join(args['base_dir'], 'results', 'fglab', args['model'], args['COP'], args['_id'])
+        raw_results_dir = os.path.join(args['base_dir'], 'results', 'raw', args['model'], args['COP'], args['_id'])
         try:
             os.makedirs(fglab_results_dir)
             os.makedirs(raw_results_dir)
@@ -196,24 +189,19 @@ def evaluate_model(args, count):
     eval_step = int(epoch * (np.ceil(args['val_size'] / float(args['parallel_envs']))))
     poisson_lambda = args['poisson_lambda'] 
     poisson_step = args['poisson_decay_step']
-    poisson_decay = args['poisson_decay_rate']
+    poisson_decay = ((poisson_lambda * args['poisson_decay_rate']) - poisson_lambda) / (poisson_step / float(args['parallel_envs']))
     epsilon = args['epsilon']
     epsilon_step = args['epsilon_decay_step']
-    epsilon_decay = args['epsilon_decay_rate']
+    epsilon_decay = ((epsilon * args['epsilon_decay_rate']) - epsilon) / (epsilon_step / float(args['parallel_envs']))
     
     running_avg_R = deque(maxlen=100)
-    tot_R = []
     running_avg_bd = deque(maxlen=100)
+    tot_R = []
     birkhoff_dist = []
-    #num_incorrectly_sorted = 0
     scores = {'_scores': {}}
     eval_means = []
     eval_stddevs = []
     optimal_matchings = []
-    #start_actor_training = 2
-    #critic_loss_ma = deque(maxlen=500)
-    #ma_queue = deque(maxlen=2)
-    #reset = False
 
     def eval(eval_step, final=False):
         # Eval 
@@ -264,10 +252,6 @@ def evaluate_model(args, count):
         mean_eval_R = np.mean(eval_R)
         stddev_eval_R = np.std(eval_R)
         mean_eval_birkhoff_dist = np.mean(eval_birkhoff_dist)
-        if args['COP'] == 'sort':
-            # Count how many 1's in eval_R
-            percent_incorrectly_sorted = (len(eval_R) - sum(eval_R == 1.)) / len(eval_R) * 100
-            scores['_scores']['percent_incorrectly_sorted_{}'.format(train_step * args['parallel_envs'])] = float(percent_incorrectly_sorted)
         if args['COP'] == 'mwm2D':
             print('avg. optimal matching weight: {:.4f}, ratio: {}'.format(np.mean(optimal_matchings), np.mean(ratios)))
         print('eval after {} train steps, got avg reward: {:.4f} and dist to nearest vertex of Birkhoff poly: {:.4f}'.format(
@@ -300,8 +284,11 @@ def evaluate_model(args, count):
             if args['use_cuda']:
                 obs = obs.cuda()
             psi, action, X, dist = actor(obs)
+            if action is None: # Nan'd out
+                return 0, 0
             # do epsilon greedy exploration
             if np.random.rand() < epsilon:
+                #action2 = action.clone()
                 # Add noise in the form of 2-exchange neighborhoods
                 # number of row-exchanges 
                 n_rows = np.random.poisson(poisson_lambda)
@@ -312,15 +299,17 @@ def evaluate_model(args, count):
                     # swap the two rows
                     tmp = action[:, idxs[0]].clone()
                     tmp2 = action[:, idxs[1]].clone()
+                    tmp3 = psi[:, idxs[0]].clone()
+                    tmp4 = psi[:, idxs[1]].clone()
                     action[:, idxs[0]] = tmp2
                     action[:, idxs[1]] = tmp
-            # anneal poisson lambda
-            if train_step > 0 and ((train_step * args['parallel_envs']) % poisson_step) < args['parallel_envs']:
-                poisson_lambda *= poisson_decay
-            # anneal epsilon with simple linear schedule
-            if train_step > 0 and ((train_step * args['parallel_envs']) % epsilon_step) < args['parallel_envs']:
-                epsilon *= epsilon_decay
- 
+                    psi[:, idxs[0]] = tmp4
+                    psi[:, idxs[1]] = tmp3
+            if train_step > 0 and poisson_lambda > 1:
+                poisson_lambda += poisson_decay
+            if train_step > 0 and epsilon > 0.1:
+                epsilon += epsilon_decay
+            
             if args['COP'] == 'sort' or args['COP'] == 'tsp':
                 # apply the permutation to the input
                 solutions = torch.matmul(torch.transpose(obs, 1, 2), action)
@@ -360,30 +349,29 @@ def evaluate_model(args, count):
                 log_value('Closeness to nearest vertex of Birkhoff Poly', np.mean(running_avg_bd), train_step)
                 log_value('Action exploration Lambda', poisson_lambda, train_step)
 
-            replay_buffer.store(obs.data, action.data, R.data)
-            #residual_loss = action_residual_loss((psi + resid).view(-1), action.view(-1))
+            replay_buffer.store(obs.data, psi.data, action.data, R.data)
             
             # sample from replay buffer if possible
             if replay_buffer.size() > args['batch_size']:
-                s_batch, a_batch, r_batch = replay_buffer.sample_batch(args['batch_size'])
+                s_batch, psi_batch, a_batch, r_batch = replay_buffer.sample_batch(args['batch_size'])
                 s_batch_t = Variable(torch.stack(s_batch))
+                psi_batch_t = Variable(torch.stack(psi_batch))
                 a_batch_t = Variable(torch.stack(a_batch)) # make sure it's disconnected from previous subgraph
                 targets = Variable(torch.stack(r_batch))
                 #targets = -1 * targets
                 # Compute Q(s_t, mu(s_t)=a_t)
                 # size is [batch_size, 1]
                 # N.B. We use the actions from the replay buffer to update the critic
-                
-                #action_smoother = Variable(torch.from_numpy(np.random.gumbel(loc=0.0, scale=0.1, size=(args['n_nodes'], args['n_nodes']))).float(), requires_grad=False)
-                #if args['use_cuda']:
-                #    action_smoother = action_smoother.cuda()
                 # a_batch_t are the hard permutations
                 #Q = critic(s_batch_t, a_batch_t + action_smoother).squeeze(2) 
-                Q = critic(s_batch_t, a_batch_t).squeeze(2)
+                hard_Q = critic(s_batch_t, a_batch_t).squeeze(2)
+                soft_Q = critic(s_batch_t, psi_batch_t).squeeze(2)
+                
                 # compute and apply critic loss
-                critic_out = critic_loss(Q, targets)
+                critic_out = critic_loss(hard_Q, targets)
+                critic_aux_out = critic_aux_loss(soft_Q, hard_Q.detach())
                 critic_optim.zero_grad()                
-                critic_out.backward()
+                (critic_out + critic_aux_out).backward()
                 # clip gradient norms
                 torch.nn.utils.clip_grad_norm(critic.parameters(),
                     args['max_grad_norm'], norm_type=2)
@@ -392,15 +380,13 @@ def evaluate_model(args, count):
                 
                 critic_optim.zero_grad()      
                 actor_optim.zero_grad()
-                soft_action, _, _, _ = actor(s_batch_t, do_round=False) 
-                #soft_action += 1e-10
+                soft_action, _, _, _ = actor(s_batch_t, do_round=False)
                 # N.B. we use the action just computed from the actor net here, which 
                 # will be used to compute the actor gradients
                 # compute gradient of critic network w.r.t. actions, grad Q_a(s,a)
-                #critic_action_grad = torch.autograd.grad(critic(s_batch_t, soft_action).squeeze(2).split(1), soft_action, retain_graph=True)
-                # compute gradient of actor network w.r.t. parameters, grad mu_theta(s; theta) * critic_action_gradient
-                #torch.autograd.backward(soft_action, critic_action_grad)
-                actor_loss = -critic(s_batch_t, soft_action).squeeze(2).mean()
+                soft_critic_out = critic(s_batch_t, soft_action).squeeze(2).mean()
+                # penalty
+                actor_loss = -soft_critic_out
                 actor_loss.backward()
 
                 # clip gradient norms
@@ -413,7 +399,8 @@ def evaluate_model(args, count):
                 if not args['disable_tensorboard']:
                     log_value('actor loss', actor_loss.data[0], train_step)
                     log_value('critic loss', critic_out.data[0], train_step)
-                    log_value('avg Q', Q.mean().data[0], train_step)  
+                    log_value('avg hard Q', hard_Q.mean().data[0], train_step)  
+                    log_value('avg soft Q', soft_Q.mean().data[0], train_step)
 
             train_step += 1
         
@@ -443,13 +430,11 @@ def evaluate_model(args, count):
 if __name__ == '__main__':
     
     args = vars(parser.parse_args())
-    args['model'] = 'ddpg'
-    # Pretty print the run args
-    pp.pprint(args)
+    args['model'] = 'spg'
     # Set the random seed
     torch.manual_seed(args['random_seed'])
     #torch.cuda.manual_seed(args['random_seed'])
     np.random.seed(args['random_seed'])
-    
+    torch.cuda.device(args['cuda_device'])
     print("Score: {}".format(evaluate_model(args, 0)))
     
