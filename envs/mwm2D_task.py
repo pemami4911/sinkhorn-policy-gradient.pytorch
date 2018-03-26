@@ -22,8 +22,9 @@ def reward(matching, use_cuda):
     M = int(N/2)    
     for i in range(M):
         dists = torch.norm(matching[:, i + M, :] - matching[:, i, :], 2, dim=1)
-        matching_weight += dists.float()
+        matching_weight += dists.float().unsqueeze(1)
     return matching_weight 
+
 def reward_nco(matching, use_cuda):
     """
     matching is a list of N Tensors of dim [batch, 4]
