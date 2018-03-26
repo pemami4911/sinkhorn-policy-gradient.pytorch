@@ -32,10 +32,10 @@ class Sinkhorn(Module):
         
     # Has to work for both +ve and -v inputs
     def exp(self, x):
-        # Compute 
-        mask = (x > 50).detach()
-        if x[mask].dim() > 0: 
-            x[mask] = torch.log(x[mask])
+        #mask = (x > 50).detach()
+        #if x[mask].dim() > 0: 
+        #    x[mask] = torch.log(x[mask])
+        #return torch.clamp(torch.exp(x), -1e18, 1e18)
         return torch.exp(x)
 
     def row_norm(self, x):

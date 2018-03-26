@@ -168,6 +168,7 @@ def evaluate_model(args, count):
         args['sl'] = True # We use the matching soln from Hungarian alg
         # Task specific configuration - generate dataset if needed
         args, env, training_dataloader, validation_dataloader, test_dataloader = dataset.build(args, args['epoch_start'])
+        mwm2D_opt = test_dataloader.dataset.get_average_optimal_weight()
     else:
         args['sl'] = False
         args, env, training_dataloader, validation_dataloader = dataset.build(args, args['epoch_start'])
@@ -202,7 +203,7 @@ def evaluate_model(args, count):
     scores = {'_scores': {}}
     eval_means = []
     eval_stddevs = []
-    optimal_matchings = []
+    #optimal_matchings = []
 
     def eval(eval_step, final=False):
         # Eval 
@@ -218,8 +219,8 @@ def evaluate_model(args, count):
         for obs in tqdm(test_dataset, disable=args['disable_progress_bar']):            
             if args['COP'] == 'mwm2D':
                 x = obs['x']
-                matching = obs['matching'].long()
-                optimal_weight = obs['weight']
+                #matching = obs['matching'].long()
+                #optimal_weight = obs['weight']
                 obs = x
             obs = Variable(obs, requires_grad=False)
             if args['use_cuda']:
@@ -238,13 +239,13 @@ def evaluate_model(args, count):
                 matchings = torch.cat([obs[:,0:args['n_nodes'],:], matchings], dim=1)
                 # concat result 
                 R = env(matchings, args['use_cuda'])
-                if args['COP'] == 'mwm2D':
+                #if args['COP'] == 'mwm2D':
                     # compute ratio
-                    optimal_matchings.append(optimal_weight.numpy())
+                #    optimal_matchings.append(optimal_weight.numpy())
             eval_R.append(R.data.cpu().numpy())
             eval_birkhoff_dist.append(dist.data.cpu().numpy())
             if args['COP'] == 'mwm2D':
-                ratios.append(R.data.cpu().numpy() / optimal_weight.numpy())
+                ratios.append(R.data.cpu().numpy() / mwm2D_opt)
             eval_step += 1
     
         # flatten
@@ -254,7 +255,7 @@ def evaluate_model(args, count):
         stddev_eval_R = np.std(eval_R)
         mean_eval_birkhoff_dist = np.mean(eval_birkhoff_dist)
         if args['COP'] == 'mwm2D':
-            print('avg. optimal matching weight: {:.4f}, ratio: {}'.format(np.mean(optimal_matchings), np.mean(ratios)))
+            print('avg. optimal matching weight: {:.4f}, ratio: {}'.format(mwm2D_opt, np.mean(ratios)))
         print('eval after {} train steps, got avg reward: {:.4f} and dist to nearest vertex of Birkhoff poly: {:.4f}'.format(
            train_step * args['parallel_envs'], mean_eval_R, mean_eval_birkhoff_dist))
         if not args['disable_tensorboard']:
@@ -286,6 +287,10 @@ def evaluate_model(args, count):
                 obs = obs.cuda()
             psi, action, X, dist = actor(obs)
             if action is None: # Nan'd out
+                if args['save_stats']:   
+                    scores['_scores']['eval_avg_reward_{}'.format(train_step * args['parallel_envs'])] = -1
+                    json.dump(scores, fglab_results)
+                    fglab_results.close()
                 return 0, 0
             # do epsilon greedy exploration
             if np.random.rand() < epsilon:
@@ -363,15 +368,16 @@ def evaluate_model(args, count):
                 # size is [batch_size, 1]
                 # N.B. We use the actions from the replay buffer to update the critic
                 # a_batch_t are the hard permutations
-                critic_optim.zero_grad()                
                 
                 hard_Q = critic(s_batch_t, a_batch_t).squeeze(2)
                 critic_out = critic_loss(hard_Q, targets)
                 if not args['disable_critic_aux_loss']:
                     soft_Q = critic(s_batch_t, psi_batch_t).squeeze(2)
                     critic_aux_out = critic_aux_loss(soft_Q, hard_Q.detach())
+                    critic_optim.zero_grad()
                     (critic_out + critic_aux_out).backward()
                 else:
+                    critic_optim.zero_grad()
                     critic_out.backward() 
                 # clip gradient norms
                 torch.nn.utils.clip_grad_norm(critic.parameters(),
@@ -379,7 +385,7 @@ def evaluate_model(args, count):
                 critic_optim.step()
                 critic_scheduler.step()                 
                 
-                critic_optim.zero_grad()      
+                critic_optim.zero_grad()                
                 actor_optim.zero_grad()
                 soft_action, _, _, _ = actor(s_batch_t, do_round=False)
                 # N.B. we use the action just computed from the actor net here, which 

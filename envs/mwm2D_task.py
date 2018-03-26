@@ -152,56 +152,10 @@ class MWM2DDataset(Dataset):
             return {'x': graph, 'matching': labels[0][0], 'weight': labels[0][1]}
         else:
             return {'x': graph}
-
-if __name__ == '__main__':
-    sizes = [5, 10, 15, 20, 25]
-    for i in sizes:
-        create_dataset(0, 0, 10000, '/home/pemami/Workspace/deep-assign/data/mwm2D/icml2018', i, 3, True, 2)
-    """
-    import time
-    from torch.utils.data import DataLoader
-
-    sizes = [5, 10, 15, 20, 25]
-    ds = ['val']
-    ee = [100000]
-    for sz in sizes:
-        for d, e in zip(ds, ee):
-            #N = int(sys.argv[1])
-            data_dir = '/home/pemami/Workspace/deep-assign/data/mwm2D/icml2018'
-            #train_fn, val_fn, test_fn = create_dataset(500000, 100000, 10000, data_dir, N=N, epoch=0, reset=False, random_seed=3, sl=True)
-            fn = os.path.join(data_dir, 'max-weight-matching-2D-size-{}-N-{}-{}.txt'.format(e, sz, d))
-            dataset = os.path.join(data_dir, fn)
-            has_labels = True
-            #mwm_data = MWM2DDataset(data_dir, 500000, has_labels=True)
-            
-            # print(mwm_data[100])
-            # start = time.time()
-            # print(mwm_data[1000])
-            # diff = time.time() - start
-            # print("took {} to retrieve one sample".format(diff))
-
-            # train_dataloader = DataLoader(mwm_data, batch_size=128, shuffle=True, num_workers=4)
-            # for idx, batch in tqdm(enumerate(train_dataloader)):
-            #     pass
-
-            ctr = 0  
-            target_dir = os.path.join(data_dir, d, 'N={}'.format(sz))
-            if not os.path.isdir(target_dir):
-                os.mkdir(target_dir)
-            count = 0  
-            target_fname = os.path.join(target_dir, '{}.txt'.format(count))
-            target_fp = open(target_fname, 'w')
-            with open(dataset, 'r') as fp:
-                for i, line in enumerate(fp): 
-                    if ctr < 4:
-                        target_fp.write(line)                             
-                    else:
-                        ctr = 0
-                        count += 1
-                        target_fname = os.path.join(target_dir, '{}.txt'.format(count))
-                        target_fp.close()
-                        target_fp = open(target_fname, 'w')
-                        target_fp.write(line) 
-                    ctr += 1                            
-            target_fp.close()
-    """
+    
+    def get_average_optimal_weight(self):
+        opt = []
+        for i in tqdm(range(self.__len__())):
+            sample = self.__getitem__(i)
+            opt.append(sample['weight'])
+        return np.mean(opt)

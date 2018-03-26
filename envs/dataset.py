@@ -32,8 +32,6 @@ def build(args, epoch, reset=False):
     elif args['COP'] == 'mwm2D':
         N = task[1]
         if not args['sl']:
-        #if args['model'] == 'spg' or args['model'] == 'nco':
-        #    args['test_size'] = 0
             args['test_size'] = 0
         elif args['model'] == 'spg' or args['model'] == 'nco':
             args['test_size'] = args['val_size']
@@ -49,7 +47,7 @@ def build(args, epoch, reset=False):
         has_labels = False
         if args['sl']:
             has_labels = True
-            test_dataset = mwm2D_task.MWM2DDataset(test_dir, args['test_size'], has_labels=True)            
+            test_dataset = mwm2D_task.MWM2DDataset(test_dir, args['test_size'], has_labels=True)           
         training_dataset = mwm2D_task.MWM2DDataset(train_dir, args['train_size'], has_labels=has_labels)
         if not reset:
             val_dataset = mwm2D_task.MWM2DDataset(val_dir, args['val_size'], has_labels=True)
