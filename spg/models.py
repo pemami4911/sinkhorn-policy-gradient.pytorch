@@ -87,7 +87,7 @@ class SPGRNNActor(nn.Module):
         x = F.leaky_relu(self.embedding(x))
         x = torch.transpose(x, 0, 1)
         init_hx = self.init_hx.unsqueeze(1).repeat(1, batch_size, 1)
-        h_last, hidden_state = self.gru(x, init_hx)
+        h_last, _ = self.gru(x, init_hx)
         # h_last should be [n_nodes, batch_size, decoder_dim]
         x = torch.transpose(h_last, 0, 1)
         # transform to [batch_size, n_nodes, n_nodes]
@@ -143,15 +143,13 @@ class SPGSiameseActor(nn.Module):
         # split x into G1 and G2
         g1 = x[:,0:self.n_nodes,:]
         g2 = x[:,self.n_nodes:2*self.n_nodes,:]
-        g1 = self.embedding(g1)
-        g2 = self.embedding(g2)
-        g1 = F.leaky_relu(g1)
-        g2 = F.leaky_relu(g2)
+        g1 = F.leaky_relu(self.embedding(g1))
+        g2 = F.leaky_relu(self.embedding(g2))
         # take outer product, result is [batch_size, N, N]
         x = torch.bmm(g2, torch.transpose(g1, 2, 1))
         x = torch.transpose(x, 0, 1)
         init_hx = self.init_hx.unsqueeze(1).repeat(1, batch_size, 1)
-        h, hidden_state = self.gru(x, init_hx)
+        h, _ = self.gru(x, init_hx)
         # h is [n_nodes, batch_size, rnn_dim]
         h = torch.transpose(h, 0, 1)
         # result M is [batch_size, n_nodes, n_nodes]

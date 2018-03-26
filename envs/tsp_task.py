@@ -27,7 +27,6 @@ def reward_spg(solution, use_cuda):
     """
     batch_size, N, _ = solution.data.shape
     tour_len = torch.zeros(batch_size, 1)
-
     if use_cuda:
         tour_len = tour_len.cuda()
     for i in range(N - 1):
@@ -186,7 +185,7 @@ def create_dataset(problem_size, data_dir):
         val_fname2 = os.path.join(data_dir, 'tsp-{}_test.txt'.format(problem_size))
         
         if not os.path.isdir(data_dir):
-            os.mkdir(data_dir)
+            os.makedirs(data_dir)
         else:
             pass
     #         if os.path.exists(train_fname1) and os.path.exists(val_fname1):
@@ -233,7 +232,7 @@ def create_dataset(
     val_fname = os.path.join(data_dir, val_task)
 
     if not os.path.isdir(data_dir):
-        os.mkdir(data_dir)
+        os.makedirs(data_dir)
     else:
         if os.path.exists(train_fname) and os.path.exists(val_fname):
             return train_fname, val_fname

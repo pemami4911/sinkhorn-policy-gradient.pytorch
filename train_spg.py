@@ -66,6 +66,7 @@ parser.add_argument('--random_seed', type=int, default=1234)
 parser.add_argument('--max_grad_norm', type=float, default=1.0, help='Gradient clipping')
 parser.add_argument('--buffer_size', type=int, default=1e6)
 parser.add_argument('--log_step', type=int, default=100, help='Log info every log_step steps')
+parser.add_argument('--disable_critic_aux_loss', type=util.str2bool, default=False)
 # CUDA
 parser.add_argument('--use_cuda', type=util.str2bool, default=True)
 parser.add_argument('--cuda_device', type=int, default=0)
@@ -94,7 +95,7 @@ DEBUG = False
 def evaluate_model(args, count):
     # Pretty print the run args
     pp.pprint(args)
-    
+ 
     if not args['disable_tensorboard'] and count == 0:
         # append last 6 digits of experiment id to run name
         args['run_name'] = args['_id'][-6:] + '-' + args['run_name']
@@ -358,20 +359,20 @@ def evaluate_model(args, count):
                 psi_batch_t = Variable(torch.stack(psi_batch))
                 a_batch_t = Variable(torch.stack(a_batch)) # make sure it's disconnected from previous subgraph
                 targets = Variable(torch.stack(r_batch))
-                #targets = -1 * targets
                 # Compute Q(s_t, mu(s_t)=a_t)
                 # size is [batch_size, 1]
                 # N.B. We use the actions from the replay buffer to update the critic
                 # a_batch_t are the hard permutations
-                #Q = critic(s_batch_t, a_batch_t + action_smoother).squeeze(2) 
-                hard_Q = critic(s_batch_t, a_batch_t).squeeze(2)
-                soft_Q = critic(s_batch_t, psi_batch_t).squeeze(2)
-                
-                # compute and apply critic loss
-                critic_out = critic_loss(hard_Q, targets)
-                critic_aux_out = critic_aux_loss(soft_Q, hard_Q.detach())
                 critic_optim.zero_grad()                
-                (critic_out + critic_aux_out).backward()
+                
+                hard_Q = critic(s_batch_t, a_batch_t).squeeze(2)
+                critic_out = critic_loss(hard_Q, targets)
+                if not args['disable_critic_aux_loss']:
+                    soft_Q = critic(s_batch_t, psi_batch_t).squeeze(2)
+                    critic_aux_out = critic_aux_loss(soft_Q, hard_Q.detach())
+                    (critic_out + critic_aux_out).backward()
+                else:
+                    critic_out.backward() 
                 # clip gradient norms
                 torch.nn.utils.clip_grad_norm(critic.parameters(),
                     args['max_grad_norm'], norm_type=2)
@@ -400,7 +401,8 @@ def evaluate_model(args, count):
                     log_value('actor loss', actor_loss.data[0], train_step)
                     log_value('critic loss', critic_out.data[0], train_step)
                     log_value('avg hard Q', hard_Q.mean().data[0], train_step)  
-                    log_value('avg soft Q', soft_Q.mean().data[0], train_step)
+                    if not args['disable_critic_aux_loss']:
+                        log_value('avg soft Q', soft_Q.mean().data[0], train_step)
 
             train_step += 1
         
@@ -435,6 +437,6 @@ if __name__ == '__main__':
     torch.manual_seed(args['random_seed'])
     #torch.cuda.manual_seed(args['random_seed'])
     np.random.seed(args['random_seed'])
-    torch.cuda.device(args['cuda_device'])
-    print("Score: {}".format(evaluate_model(args, 0)))
+    with torch.cuda.device(args['cuda_device']):
+        print("Score: {}".format(evaluate_model(args, 0)))
     

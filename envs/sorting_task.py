@@ -179,7 +179,7 @@ def create_dataset(
     val_fname = os.path.join(data_dir, val_task)
 
     if not os.path.isdir(data_dir):
-        os.mkdir(data_dir)
+        os.makedirs(data_dir)
     elif os.path.exists(train_fname) and os.path.exists(val_fname):
             return train_fname, val_fname
     

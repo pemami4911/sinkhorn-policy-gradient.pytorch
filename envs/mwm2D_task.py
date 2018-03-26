@@ -56,11 +56,11 @@ def create_dataset(
         return train_dir, val_dir, test_dir
     
     if not os.path.isdir(train_dir):
-        os.mkdir(train_dir)
+        os.makedirs(train_dir)
     if not os.path.isdir(val_dir):
-        os.mkdir(val_dir)
+        os.makedirs(val_dir)
     if not os.path.isdir(test_dir):
-        os.mkdir(test_dir)
+        os.makedirs(test_dir)
 
     
     def to_string(tensor, label=None):

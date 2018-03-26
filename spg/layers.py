@@ -34,7 +34,8 @@ class Sinkhorn(Module):
     def exp(self, x):
         # Compute 
         mask = (x > 50).detach()
-        x[mask] = torch.log(x[mask])
+        if x[mask].dim() > 0: 
+            x[mask] = torch.log(x[mask])
         return torch.exp(x)
 
     def row_norm(self, x):
@@ -46,10 +47,6 @@ class Sinkhorn(Module):
         return torch.div(x, y)
 
     def forward(self, x):
-        #smoother = Variable(torch.from_numpy(np.random.gumbel(0, 0.1, (self.n_nodes, self.n_nodes))).float(), requires_grad=False)
-        #if self.use_cuda:
-        #    smoother = smoother.cuda()
-        #x += smoother
         x = self.exp(x / self.tau)
         x = torch.add(x, self.eps)
         for _ in range(self.sinkhorn_iters):
@@ -80,6 +77,7 @@ class Sinkhorn(Module):
 #
 
 class LayerNorm(Module):
+    " Simple, slow LayerNorm "
 
     def __init__(self, features, eps=1e-6):
         super().__init__()
