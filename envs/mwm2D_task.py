@@ -63,7 +63,6 @@ def create_dataset(
     if not os.path.isdir(test_dir):
         os.makedirs(test_dir)
 
-    
     def to_string(tensor, label=None):
         """
         Convert a torch.FloatTensor 

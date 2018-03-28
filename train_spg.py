@@ -73,6 +73,7 @@ parser.add_argument('--cuda_device', type=int, default=0)
 # Misc
 parser.add_argument('--run_name', type=str, default='0')
 parser.add_argument('--base_dir', type=str, default='/media/pemami/DATA/sinkhorn-pg/')
+parser.add_argument('--data', type=str, default='ablation')
 parser.add_argument('--epoch_start', type=int, default=0, help='Restart at epoch #')
 parser.add_argument('--save_model', type=util.str2bool, default=False, help='Save after epoch')
 parser.add_argument('--save_stats', type=util.str2bool, default=True)
@@ -294,12 +295,11 @@ def evaluate_model(args, count):
                 return 0, 0
             # do epsilon greedy exploration
             if np.random.rand() < epsilon:
-                #action2 = action.clone()
                 # Add noise in the form of 2-exchange neighborhoods
                 # number of row-exchanges 
-                n_rows = np.random.poisson(poisson_lambda)
+                #n_rows = np.random.poisson(poisson_lambda)
                 #for idx in range(args['parallel_envs']):
-                for r in range(n_rows):
+                for r in range(2):
                     # randomly choose two row idxs
                     idxs = np.random.randint(0, args['n_nodes'], size=2)
                     # swap the two rows
@@ -313,7 +313,7 @@ def evaluate_model(args, count):
                     psi[:, idxs[1]] = tmp3
             if train_step > 0 and poisson_lambda > 1:
                 poisson_lambda += poisson_decay
-            if train_step > 0 and epsilon > 0.1:
+            if train_step > 0 and epsilon > 0.01:
                 epsilon += epsilon_decay
             
             if args['COP'] == 'sort' or args['COP'] == 'tsp':

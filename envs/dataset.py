@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 
 def build(args, epoch, reset=False):
     # Task specific configuration - generate dataset if needed
-    args['data_dir'] = os.path.join(args['base_dir'], 'data', args['COP'], 'icml2018')
+    args['data_dir'] = os.path.join(args['base_dir'], 'data', args['COP'], args['data'])
     task = args['task'].split('_')
 
     if args['COP'] == 'sort':
