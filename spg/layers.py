@@ -3,8 +3,9 @@ from torch.nn.parameter import Parameter
 from torch.nn.modules.module import Module
 from torch.autograd import Variable
 import torch.nn.functional as F
-from spg.hungarian import Hungarian
 import numpy as np
+
+from util import logsumexp
 
 class Sinkhorn(Module):
     """
@@ -17,8 +18,7 @@ class Sinkhorn(Module):
         super(Sinkhorn, self).__init__()
         self.n_nodes = n_nodes
         self.ones = Variable(torch.ones(n_nodes, 1), requires_grad=False)
-        self.eps = 1e-7 * torch.eye(self.n_nodes)
-        self.eps = Variable(self.eps, requires_grad=False)
+        self.eps = Variable(torch.FloatTensor([1e-6]), requires_grad=False)
         self.tau = tau
         self.sinkhorn_iters = sinkhorn_iters
         if cuda:
@@ -30,29 +30,29 @@ class Sinkhorn(Module):
         self.ones = self.ones.cuda()
         self.eps = self.eps.cuda()
         
-    # Has to work for both +ve and -v inputs
-    def exp(self, x):
-        #mask = (x > 50).detach()
-        #if x[mask].dim() > 0: 
-        #    x[mask] = torch.log(x[mask])
-        #return torch.clamp(torch.exp(x), -1e18, 1e18)
-        return torch.exp(x)
-
     def row_norm(self, x):
-        y = torch.matmul(torch.matmul(x, self.ones), torch.t(self.ones))
-        return torch.div(x, y)
+        """Unstable implementation"""
+        #y = torch.matmul(torch.matmul(x, self.ones), torch.t(self.ones))
+        #return torch.div(x, y)
+        """Stable, log-scale implementation"""
+        return x - logsumexp(x, dim=2, keepdim=True)
 
     def col_norm(self, x):
-        y = torch.matmul(torch.matmul(self.ones, torch.t(self.ones)), x)
-        return torch.div(x, y)
+        """Unstable implementation"""
+        #y = torch.matmul(torch.matmul(self.ones, torch.t(self.ones)), x)
+        #return torch.div(x, y)
+        """Stable, log-scale implementation"""
+        return x - logsumexp(x, dim=1, keepdim=True)
 
     def forward(self, x):
-        x = self.exp(x / self.tau)
-        x = torch.add(x, self.eps)
+        """ 
+            x: [batch_size, N, N]
+        """
+        x = x / self.tau
         for _ in range(self.sinkhorn_iters):
             x = self.row_norm(x)
             x = self.col_norm(x)
-        return x
+        return torch.exp(x) + self.eps
 
 #class GraphConvolution(Module):
 #    """
@@ -97,10 +97,10 @@ if __name__ == '__main__':
     n_nodes = 10
 
     torch.set_printoptions(profile="short")
-    snl = Sinkhorn(n_nodes, 17, 0.1, cuda=False)
+    snl = Sinkhorn(n_nodes, 10, 0.1, cuda=False)
 
     x = Variable(torch.from_numpy(np.random.normal(size=(batch_size, n_nodes, n_nodes))).float())
     #print('input: {}'.format(x))
     out = snl.forward(x)
-    print('outputs: {}, rounded: {}, dist: {}/10'.format(out, rounded_out, dist.data[0]))
+    print("Sinkhorn balanced matrix: {}".format(out))
     print('row sums: {} col sums: {}'.format(torch.sum(out, dim=1), torch.sum(out, dim=2)))
