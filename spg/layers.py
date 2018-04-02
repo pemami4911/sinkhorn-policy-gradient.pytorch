@@ -5,7 +5,7 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 import numpy as np
 
-from util import logsumexp
+from spg.util import logsumexp
 
 class Sinkhorn(Module):
     """
