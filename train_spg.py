@@ -73,7 +73,7 @@ parser.add_argument('--cuda_device', type=int, default=0)
 # Misc
 parser.add_argument('--run_name', type=str, default='0')
 parser.add_argument('--base_dir', type=str, default='/media/pemami/DATA/sinkhorn-pg/')
-parser.add_argument('--data', type=str, default='ablation')
+parser.add_argument('--data', type=str, default='icml2018')
 parser.add_argument('--epoch_start', type=int, default=0, help='Restart at epoch #')
 parser.add_argument('--save_model', type=util.str2bool, default=False, help='Save after epoch')
 parser.add_argument('--save_stats', type=util.str2bool, default=True)
