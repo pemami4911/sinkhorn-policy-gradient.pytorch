@@ -67,6 +67,7 @@ parser.add_argument('--max_grad_norm', type=float, default=1.0, help='Gradient c
 parser.add_argument('--buffer_size', type=int, default=1e6)
 parser.add_argument('--log_step', type=int, default=100, help='Log info every log_step steps')
 parser.add_argument('--disable_critic_aux_loss', type=util.str2bool, default=False)
+parser.add_argument('--actor_workers', type=int, default=4)
 # CUDA
 parser.add_argument('--use_cuda', type=util.str2bool, default=True)
 parser.add_argument('--cuda_device', type=int, default=0)
@@ -127,13 +128,13 @@ def evaluate_model(args, count):
         elif args['arch'] == 'rnn':
             actor = SPGRNNActor(args['n_features'], args['n_nodes'], args['embedding_dim'],
                     args['rnn_dim'], args['sinkhorn_iters'],
-                    args['sinkhorn_tau'], args['alpha'], args['use_cuda'])
+                    args['sinkhorn_tau'], args['alpha'], args['actor_workers'], args['use_cuda'])
             critic = SPGRNNCritic(args['n_features'], args['n_nodes'], args['embedding_dim'],
                     args['rnn_dim'], args['use_cuda'])
         elif args['arch'] == 'siamese':
             actor = SPGSiameseActor(args['n_features'], args['n_nodes'], args['embedding_dim'],
                 args['rnn_dim'], args['sinkhorn_iters'],  args['sinkhorn_tau'], args['alpha'],
-                args['use_cuda'])
+                args['actor_workers'], args['use_cuda'])
             critic = SPGSiameseCritic(args['n_features'], args['n_nodes'], args['embedding_dim'],
                 args['rnn_dim'], args['use_cuda'])
     args['save_dir'] = os.path.join(args['base_dir'], 'results', 'models', args['COP'], 'spg', args['arch'], args['_id'])    
@@ -141,12 +142,11 @@ def evaluate_model(args, count):
         os.makedirs(args['save_dir'])
     except:
         pass
-
+    
     if args['use_cuda']:
         actor = actor.cuda()
         critic = critic.cuda()
-
-    # Optimizers
+    #Optimizers
     actor_optim = optim.Adam(actor.parameters(), lr=args['actor_lr'])
     critic_optim = optim.Adam(critic.parameters(), lr=args['critic_lr'])
     critic_loss = torch.nn.MSELoss()
@@ -162,6 +162,12 @@ def evaluate_model(args, count):
     critic_scheduler = lr_scheduler.MultiStepLR(critic_optim,
         range(args['critic_lr_decay_step'], args['critic_lr_decay_step'] * 1000,
             args['critic_lr_decay_step']), gamma=args['critic_lr_decay_rate'])
+
+    model_parameters = filter(lambda p: p.requires_grad, actor.parameters())
+    print("# of trainable actor parameters: {}".format(sum([np.prod(p.size()) for p in model_parameters])))
+    model_parameters = filter(lambda p: p.requires_grad, critic.parameters())
+    print("# of trainable critic parameters: {}".format(sum([np.prod(p.size()) for p in model_parameters])))
+    
 
     replay_buffer = ReplayBuffer(args['buffer_size'], args['random_seed'])
 
@@ -244,7 +250,7 @@ def evaluate_model(args, count):
             eval_birkhoff_dist.append(dist.data.cpu().numpy())
             if args['COP'] == 'mwm2D':
                 ratios.append(R.data.cpu().numpy() / mwm2D_opt)
-            eval_step += 1
+        eval_step += 1
     
         # flatten
         eval_R = np.array(eval_R).ravel()

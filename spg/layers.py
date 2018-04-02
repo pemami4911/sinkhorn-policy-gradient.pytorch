@@ -14,22 +14,12 @@ class Sinkhorn(Module):
     If L is too large or tau is too small, gradients will disappear 
     and cause the network to NaN out!
     """    
-    def __init__(self, n_nodes, sinkhorn_iters=5, tau=0.01, cuda=True):
+    def __init__(self, n_nodes, sinkhorn_iters=5, tau=0.01):
         super(Sinkhorn, self).__init__()
         self.n_nodes = n_nodes
-        self.ones = Variable(torch.ones(n_nodes, 1), requires_grad=False)
-        self.eps = Variable(torch.FloatTensor([1e-6]), requires_grad=False)
         self.tau = tau
         self.sinkhorn_iters = sinkhorn_iters
-        if cuda:
-            self.ones = self.ones.cuda()
-            self.eps = self.eps.cuda()
-        self.use_cuda = cuda
 
-    def cuda_after_load(self):
-        self.ones = self.ones.cuda()
-        self.eps = self.eps.cuda()
-        
     def row_norm(self, x):
         """Unstable implementation"""
         #y = torch.matmul(torch.matmul(x, self.ones), torch.t(self.ones))
@@ -44,7 +34,7 @@ class Sinkhorn(Module):
         """Stable, log-scale implementation"""
         return x - logsumexp(x, dim=1, keepdim=True)
 
-    def forward(self, x):
+    def forward(self, x, eps=1e-6):
         """ 
             x: [batch_size, N, N]
         """
@@ -52,7 +42,7 @@ class Sinkhorn(Module):
         for _ in range(self.sinkhorn_iters):
             x = self.row_norm(x)
             x = self.col_norm(x)
-        return torch.exp(x) + self.eps
+        return torch.exp(x) + eps
 
 #class GraphConvolution(Module):
 #    """

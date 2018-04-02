@@ -5,8 +5,9 @@ from torch.autograd import Variable
 import numpy as np
 import math
 from spg.layers import Sinkhorn, LayerNorm
+from spg.util import parallel_matching
 from sklearn.utils.linear_assignment_ import linear_assignment
-from spg.hungarian import Hungarian
+from pathos.multiprocessing import ProcessingPool as Pool
 
 class SPGMLPActor(nn.Module):
     """
@@ -21,7 +22,7 @@ class SPGMLPActor(nn.Module):
         self.alpha = alpha
         self.fc1 = nn.Linear(n_features, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, n_nodes)
-        self.sinkhorn = Sinkhorn(n_nodes, sinkhorn_iters, sinkhorn_tau, cuda=cuda)
+        self.sinkhorn = Sinkhorn(n_nodes, sinkhorn_iters, sinkhorn_tau)
         self.bn1 = nn.BatchNorm1d(n_nodes)
         self.bn2 = nn.BatchNorm1d(n_nodes)
         self.round = linear_assignment
@@ -58,24 +59,27 @@ class SPGRNNActor(nn.Module):
 
     """
     def __init__(self, n_features, n_nodes, embedding_dim, rnn_dim,
-            sinkhorn_iters=5, sinkhorn_tau=1, alpha=1., cuda=True):
+            sinkhorn_iters=5, sinkhorn_tau=1, alpha=1., num_workers=4, cuda=True):
         super(SPGRNNActor, self).__init__()
         self.use_cuda = cuda
         self.n_nodes = n_nodes
         self.alpha = alpha
         self.embedding_dim = embedding_dim
         self.rnn_dim = rnn_dim
+        self.num_workers = num_workers
         self.embedding = nn.Linear(n_features, embedding_dim)
         self.gru = nn.GRU(embedding_dim, rnn_dim)
         self.fc1 = nn.Linear(self.rnn_dim, embedding_dim)
         self.fc2 = nn.Linear(self.embedding_dim, n_nodes)
-        self.sinkhorn = Sinkhorn(n_nodes, sinkhorn_iters, sinkhorn_tau, cuda)
+        self.sinkhorn = Sinkhorn(n_nodes, sinkhorn_iters, sinkhorn_tau)
         self.round = linear_assignment
         init_hx = torch.zeros(1, self.rnn_dim)
         if cuda:
             init_hx = init_hx.cuda()
         self.init_hx = Variable(init_hx, requires_grad=False)
-    
+        if num_workers > 0:
+            self.pool = Pool(num_workers)
+
     def cuda_after_load(self):
         self.init_hx = self.init_hx.cuda()
     
@@ -83,6 +87,7 @@ class SPGRNNActor(nn.Module):
         """
         x is [batch_size, n_nodes, num_features]
         """
+        
         batch_size = x.size()[0]
         x = F.leaky_relu(self.embedding(x))
         x = torch.transpose(x, 0, 1)
@@ -95,15 +100,19 @@ class SPGRNNActor(nn.Module):
         M = self.fc2(x)
         psi = self.sinkhorn(M)
         if do_round:
-            perms = []
             batch = psi.data.cpu().numpy()
             if np.any(np.isnan(batch)):
                 return None, None, None, None
-            for i in range(batch_size):
-                perm = torch.zeros(self.n_nodes, self.n_nodes)
-                matching = self.round(-batch[i])
-                perm[matching[:,0], matching[:,1]] = 1
-                perms.append(perm)
+            if self.num_workers > 0:
+                batches = np.split(batch, 4, 0)
+                perms = self.pool.map(parallel_matching, batches)
+                perms = [p for pp in perms for p in pp]
+            else:
+                for i in range(batch_size):
+                    perm = torch.zeros(self.n_nodes, self.n_nodes)
+                    matching = self.round(-batch[i])
+                    perm[matching[:,0], matching[:,1]] = 1
+                    perms.append(perm)
             perms = Variable(torch.stack(perms), requires_grad=False)
             if self.use_cuda:
                 perms = perms.cuda()
@@ -115,21 +124,24 @@ class SPGRNNActor(nn.Module):
 
 class SPGSiameseActor(nn.Module):
     def __init__(self, n_features, n_nodes, embedding_dim, rnn_dim,
-            sinkhorn_iters=5, sinkhorn_tau=1., alpha=1., cuda=True):
+            sinkhorn_iters=5, sinkhorn_tau=1., alpha=1., num_workers=4, cuda=True):
         super(SPGSiameseActor, self).__init__()
         self.use_cuda = cuda
         self.n_nodes = n_nodes
         self.rnn_dim = rnn_dim
         self.alpha = alpha
+        self.num_workers = num_workers
         self.embedding = nn.Linear(n_features, embedding_dim)
         self.gru = nn.GRU(n_nodes, rnn_dim)
         self.fc1 = nn.Linear(self.rnn_dim, n_nodes)
-        self.sinkhorn = Sinkhorn(n_nodes, sinkhorn_iters, sinkhorn_tau, cuda)
+        self.sinkhorn = Sinkhorn(n_nodes, sinkhorn_iters, sinkhorn_tau)
         self.round = linear_assignment
         init_hx = torch.zeros(1, self.rnn_dim)
         if cuda:
             init_hx = init_hx.cuda()
         self.init_hx = Variable(init_hx, requires_grad=False)
+        if num_workers > 0:
+            self.pool = Pool(num_workers) 
 
     def cuda_after_load(self):
         self.init_hx = self.init_hx.cuda()
@@ -160,13 +172,16 @@ class SPGSiameseActor(nn.Module):
             batch = psi.data.cpu().numpy()
             if np.any(np.isnan(batch)):
                 return None, None, None, None
-            for i in range(batch_size):
-                perm = torch.zeros(self.n_nodes, self.n_nodes)
-                matching = self.round(-batch[i])
-                perm[matching[:,0], matching[:,1]] = 1
-                #_, perm = self.round2(batch[i])
-                #perm = torch.from_numpy(perm).float()
-                perms.append(perm)
+            if self.num_workers > 0:
+                batches = np.split(batch, self.num_workers, 0)
+                perms = self.pool.map(parallel_matching, batches)
+                perms = [p for pp in perms for p in pp]
+            else:
+                for i in range(batch_size):
+                    perm = torch.zeros(self.n_nodes, self.n_nodes)
+                    matching = self.round(-batch[i])
+                    perm[matching[:,0], matching[:,1]] = 1
+                    perms.append(perm)
             perms = Variable(torch.stack(perms), requires_grad=False)
             if self.use_cuda:
                 perms = perms.cuda()
