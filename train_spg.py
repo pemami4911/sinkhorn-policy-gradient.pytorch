@@ -204,7 +204,6 @@ def evaluate_model(args, count):
     scores = {'_scores': {}}
     eval_means = []
     eval_stddevs = []
-    #optimal_matchings = []
 
     def eval(eval_step, final=False):
         # Eval 
@@ -220,8 +219,6 @@ def evaluate_model(args, count):
         for obs in tqdm(test_dataset, disable=args['disable_progress_bar']):            
             if args['COP'] == 'mwm2D':
                 x = obs['x']
-                #matching = obs['matching'].long()
-                #optimal_weight = obs['weight']
                 obs = x
             obs = Variable(obs, requires_grad=False)
             if args['use_cuda']:
