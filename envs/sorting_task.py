@@ -160,7 +160,7 @@ def reward_ddpg_D(solution, use_cuda):
 
 def create_dataset(
         train_size,
-        val_size,
+        test_size,
         data_dir,
         epoch,
         low=1, 
@@ -173,19 +173,19 @@ def create_dataset(
         torch.manual_seed(random_seed)
     
     train_task = 'epoch-{}-sorting-size-{}-low-{}-high-{}-train.txt'.format(epoch, train_size, low, high)
-    val_task = 'sorting-size-{}-low-{}-high-{}-val.txt'.format(val_size, low, high)
+    test_task = 'sorting-size-{}-low-{}-high-{}-test.txt'.format(test_size, low, high)
     
     train_fname = os.path.join(data_dir, train_task)
-    val_fname = os.path.join(data_dir, val_task)
+    test_fname = os.path.join(data_dir, test_task)
 
     if not os.path.isdir(data_dir):
         os.makedirs(data_dir)
-    elif os.path.exists(train_fname) and os.path.exists(val_fname):
-            return train_fname, val_fname
+    elif os.path.exists(train_fname) and os.path.exists(test_fname):
+            return train_fname, test_fname
     
     train_set = open(os.path.join(data_dir, train_task), 'w')
     if not train_only:
-        val_set = open(os.path.join(data_dir, val_task), 'w') 
+        test_set = open(os.path.join(data_dir, test_task), 'w') 
     
     def to_string(tensor):
         """
@@ -208,16 +208,16 @@ def create_dataset(
         train_set.write(to_string(x))
 
     if not train_only:
-        print('Creating validation data set for {}...'.format(val_task))
+        print('Creating test data set for {}...'.format(test_task))
         
-        for i in trange(val_size):
+        for i in trange(test_size):
             x = torch.randperm(data_len) + low
-            val_set.write(to_string(x))
-        val_set.close()
+            test_set.write(to_string(x))
+        test_set.close()
 
     train_set.close()
 
-    return train_fname, val_fname
+    return train_fname, test_fname
 
 class SortingDataset(Dataset):
 

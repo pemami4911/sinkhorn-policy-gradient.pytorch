@@ -69,8 +69,7 @@ class SPGRNNActor(nn.Module):
         self.num_workers = num_workers
         self.embedding = nn.Linear(n_features, embedding_dim)
         self.gru = nn.GRU(embedding_dim, rnn_dim)
-        self.fc1 = nn.Linear(self.rnn_dim, embedding_dim)
-        self.fc2 = nn.Linear(self.embedding_dim, n_nodes)
+        self.fc2 = nn.Linear(self.rnn_dim, n_nodes)
         self.sinkhorn = Sinkhorn(n_nodes, sinkhorn_iters, sinkhorn_tau)
         self.round = linear_assignment
         init_hx = torch.zeros(1, self.rnn_dim)
@@ -96,7 +95,6 @@ class SPGRNNActor(nn.Module):
         # h_last should be [n_nodes, batch_size, decoder_dim]
         x = torch.transpose(h_last, 0, 1)
         # transform to [batch_size, n_nodes, n_nodes]
-        x = F.leaky_relu(self.fc1(x))
         M = self.fc2(x)
         psi = self.sinkhorn(M)
         if do_round:
@@ -229,8 +227,8 @@ class SPGRNNCritic(nn.Module):
         self.rnn_dim = rnn_dim
         self.embeddingX = nn.Linear(n_features, embedding_dim)
         self.embeddingP = nn.Linear(n_nodes, embedding_dim)
-        self.combine = nn.Linear(embedding_dim, embedding_dim)           
-        self.gru= nn.GRU(embedding_dim, rnn_dim)
+        self.combine = nn.Linear(embedding_dim, embedding_dim)
+        self.gru = nn.GRU(embedding_dim, rnn_dim)
         self.fc1 = nn.Linear(embedding_dim, 1)
         self.fc2 = nn.Linear(n_nodes, 1)
         self.fc3 = nn.Linear(rnn_dim, embedding_dim)
@@ -254,6 +252,7 @@ class SPGRNNCritic(nn.Module):
         p = F.leaky_relu(self.bn2(self.embeddingP(p)))
         xp = F.leaky_relu(self.bn3(self.combine(x + p)))
         x = torch.transpose(xp, 0, 1)
+        #x = torch.transpose(x, 0, 1)
         init_hx = self.init_hx.unsqueeze(1).repeat(1, batch_size, 1)
         h_last, hidden_state = self.gru(x, init_hx)
         # h_last should be [n_nodes, batch_size, decoder_dim]
@@ -277,8 +276,7 @@ class SPGSiameseCritic(nn.Module):
         self.combine = nn.Linear(embedding_dim, n_nodes)
         self.bn1 = nn.BatchNorm1d(n_nodes)
         self.bn2 = nn.BatchNorm1d(n_nodes)
-        self.fc1 = nn.Linear(self.rnn_dim, embedding_dim)
-        self.fc11 = nn.Linear(embedding_dim, n_nodes)
+        self.fc1 = nn.Linear(self.rnn_dim, n_nodes)
         self.fc2 = nn.Linear(n_nodes, 1)
         self.fc3 = nn.Linear(n_nodes, 1)
         init_hx = torch.zeros(1, self.rnn_dim)
@@ -302,7 +300,6 @@ class SPGSiameseCritic(nn.Module):
         g2 = F.leaky_relu(self.embedding(g2))
         # take outer product, result is [batch_size, N, N]
         x = torch.bmm(g2, torch.transpose(g1, 2, 1))
-        x = F.leaky_relu(x)
         x = torch.transpose(x, 0, 1)
         init_hx = self.init_hx.unsqueeze(1).repeat(1, batch_size, 1)
         h, hidden_state = self.gru(x, init_hx)

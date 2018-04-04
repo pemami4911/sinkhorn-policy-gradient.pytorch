@@ -216,7 +216,7 @@ def create_dataset(problem_size, data_dir):
 
 def create_dataset(
         train_size,
-        val_size,
+        test_size,
         data_dir,
         tour_len,
         epoch,
@@ -226,20 +226,20 @@ def create_dataset(
         torch.manual_seed(random_seed)
 
     train_task = 'tsp-size-{}-N-{}-train.txt'.format(train_size, tour_len)
-    val_task = 'tsp-size-{}-N-{}-val.txt'.format(val_size, tour_len)
+    test_task = 'tsp-size-{}-N-{}-test.txt'.format(test_size, tour_len)
 
     train_fname = os.path.join(data_dir, train_task)
-    val_fname = os.path.join(data_dir, val_task)
+    test_fname = os.path.join(data_dir, test_task)
 
     if not os.path.isdir(data_dir):
         os.makedirs(data_dir)
     else:
-        if os.path.exists(train_fname) and os.path.exists(val_fname):
-            return train_fname, val_fname
+        if os.path.exists(train_fname) and os.path.exists(test_fname):
+            return train_fname, test_fname
 
     train_set = open(os.path.join(data_dir, train_task), 'w')
     if not reset:
-        val_set = open(os.path.join(data_dir, val_task), 'w')
+        test_set = open(os.path.join(data_dir, test_task), 'w')
 
     def to_string(tensor):
         """
@@ -263,15 +263,15 @@ def create_dataset(
         train_set.write(to_string(x))
     
     if not reset:
-        print('Creating validation data set for {}...'.format(val_task))
+        print('Creating test data set for {}...'.format(test_task))
 
-        for i in trange(val_size):
+        for i in trange(test_size):
             x = torch.FloatTensor(2, tour_len).uniform_(0, 1)
-            val_set.write(to_string(x))
-        val_set.close()
+            test_set.write(to_string(x))
+        test_set.close()
     train_set.close()
 
-    return train_fname, val_fname
+    return train_fname, test_fname
 
 # Dataset
 #######################################

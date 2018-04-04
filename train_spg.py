@@ -37,7 +37,7 @@ parser.add_argument('--task', default='tsp_10', help='Supported: {sort, mwm, mwm
 parser.add_argument('--parallel_envs', type=int, default=32)
 parser.add_argument('--batch_size', type=int, default=128)
 parser.add_argument('--train_size', type=int, default=500000)
-parser.add_argument('--val_size', type=int, default=10000)
+parser.add_argument('--test_size', type=int, default=10000)
 # Model cfg options here
 parser.add_argument('--n_features', type=int, default=2)
 parser.add_argument('--n_nodes', type=int, default=10)
@@ -163,22 +163,17 @@ def evaluate_model(args, count):
         range(args['critic_lr_decay_step'], args['critic_lr_decay_step'] * 1000,
             args['critic_lr_decay_step']), gamma=args['critic_lr_decay_rate'])
 
+    # Count the number of model parameters
     model_parameters = filter(lambda p: p.requires_grad, actor.parameters())
     print("# of trainable actor parameters: {}".format(sum([np.prod(p.size()) for p in model_parameters])))
     model_parameters = filter(lambda p: p.requires_grad, critic.parameters())
     print("# of trainable critic parameters: {}".format(sum([np.prod(p.size()) for p in model_parameters])))
-    
-
+    # Instantiate replay buffer
     replay_buffer = ReplayBuffer(args['buffer_size'], args['random_seed'])
-
+    # Get dataloaders for train and test datasets
+    args, env, training_dataloader, test_dataloader = dataset.build(args, args['epoch_start'])
     if args['COP'] == 'mwm2D':
-        args['sl'] = True # We use the matching soln from Hungarian alg
-        # Task specific configuration - generate dataset if needed
-        args, env, training_dataloader, validation_dataloader, test_dataloader = dataset.build(args, args['epoch_start'])
         mwm2D_opt = test_dataloader.dataset.get_average_optimal_weight()
-    else:
-        args['sl'] = False
-        args, env, training_dataloader, validation_dataloader = dataset.build(args, args['epoch_start'])
     # Open files for writing results
     if args['save_stats']:
         fglab_results_dir = os.path.join(args['base_dir'], 'results', 'fglab', args['model'], args['COP'], args['_id'])
@@ -195,7 +190,7 @@ def evaluate_model(args, count):
     # approx, since we throw away minibatches that aren't complete
     num_steps_per_epoch = np.ceil(args['train_size'] / float(args['parallel_envs']))
     train_step = int(epoch * num_steps_per_epoch)
-    eval_step = int(epoch * (np.ceil(args['val_size'] / float(args['parallel_envs']))))
+    eval_step = int(epoch * (np.ceil(args['test_size'] / float(args['parallel_envs']))))
     poisson_lambda = args['poisson_lambda'] 
     poisson_step = args['poisson_decay_step']
     poisson_decay = ((poisson_lambda * args['poisson_decay_rate']) - poisson_lambda) / (poisson_step / float(args['parallel_envs']))
@@ -218,19 +213,12 @@ def evaluate_model(args, count):
         ratios = []
         actor.eval()
         critic.eval()
-        if args['sl']:
-            test_dataset = test_dataloader
-        else:
-            test_dataset = validation_dataloader
-        for obs in tqdm(test_dataset, disable=args['disable_progress_bar']):            
-            if args['COP'] == 'mwm2D':
-                x = obs['x']
-                obs = x
+        for obs in tqdm(test_dataloader, disable=args['disable_progress_bar']):            
+            obs = obs.pin_memory()
             obs = Variable(obs, requires_grad=False)
             if args['use_cuda']:
-                obs = obs.cuda()
+                obs = obs.cuda(async=True)
             _,  action, _, dist = actor(obs)
-    
             if args['COP'] == 'sort' or args['COP'] == 'tsp':
                 # apply the permutation to the input
                 solutions = torch.matmul(torch.transpose(obs, 1, 2), action)
@@ -283,12 +271,10 @@ def evaluate_model(args, count):
         actor.train()
         critic.train()
         for obs in tqdm(training_dataloader, disable=args['disable_progress_bar']):
-            if args['COP'] == 'mwm2D' or args['COP'] == 'mwm':
-                x = obs['x']
-                obs = x
+            obs.pin_memory()
             obs = Variable(obs, requires_grad=False)
             if args['use_cuda']:
-                obs = obs.cuda()
+                obs = obs.cuda(async=True)
             psi, action, X, dist = actor(obs)
             if action is None: # Nan'd out
                 if args['save_stats']:   
@@ -442,6 +428,7 @@ if __name__ == '__main__':
     
     args = vars(parser.parse_args())
     args['model'] = 'spg'
+    args['sl'] = False
     # Set the random seed
     torch.manual_seed(args['random_seed'])
     #torch.cuda.manual_seed(args['random_seed'])

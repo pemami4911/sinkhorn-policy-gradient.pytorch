@@ -38,6 +38,7 @@ def create_dataset(
         test_size,
         data_dir,
         N,
+        maximal=True,
         random_seed=None,
         sl=False,
         only=-1):    
@@ -94,8 +95,10 @@ def create_dataset(
             for i in range(N):
                 for j in range(N):
                     C[i,j] = np.linalg.norm(x_[2:4, i] - x_[0:2, j], ord=2)
-            # Find the max matching
-            max_matching = linear_assignment(-C)
+            if maximal:
+                C = -C
+            # Find the optimal matching
+            max_matching = linear_assignment(C)
             weight = np.sum(C[max_matching[:,0], max_matching[:,1]])                
             if idx < train_size and (only == -1 or only == 0):
                 sample = to_string(x, (max_matching[:,1], weight))
@@ -112,6 +115,8 @@ def create_dataset(
                 fp = open(os.path.join(test_dir, '{}.txt'.format(ctr - (train_size + val_size))), 'w')
                 fp.write(sample)
                 fp.close()
+            else:
+                ctr -= 1
         else:
             sample = to_string(x)
             fp = open(os.path.join(train_dir, '{}.txt'.format(ctr)), 'w')
@@ -150,11 +155,14 @@ class MWM2DDataset(Dataset):
         if self.has_labels:
             return {'x': graph, 'matching': labels[0][0], 'weight': labels[0][1]}
         else:
-            return {'x': graph}
+            return graph
     
     def get_average_optimal_weight(self):
         opt = []
+        assert not self.has_labels
+        self.has_labels = True
         for i in tqdm(range(self.__len__())):
             sample = self.__getitem__(i)
             opt.append(sample['weight'])
+        self.has_labels = False
         return np.mean(opt)
