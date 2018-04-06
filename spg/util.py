@@ -77,6 +77,8 @@ def parallel_matching(batch):
     (m, n, n) = batch.shape
     for i in range(m):
         perm = torch.zeros(n,n)
+        #v = torch.ones(n)
+        #i = torch.from_numpy(linear_assignment(-batch[i])).long()
         matching = linear_assignment(-batch[i])
         perm[matching[:,0], matching[:,1]] = 1
         perms.append(perm)
@@ -89,10 +91,6 @@ if __name__ == '__main__':
     x = torch.exp(x / 0.1)
     #x = torch.ones(3,3)
     print(x)
-    
-    log_scale_res_1 = torch.log(x) - lse(x)
-    print("Log scale res 1 {}".format(log_scale_res_1))
-    print("exp(log_scale_res_1): {}".format(torch.exp(log_scale_res_1)))
 
     log_scale_res_2 = torch.log(x) - logsumexp(x, dim=0, keepdim=True)
     print("Log scale res 2 {}".format(log_scale_res_2))
@@ -100,3 +98,8 @@ if __name__ == '__main__':
 
     rn = torch.div(x , torch.matmul(torch.matmul(x,ones), torch.t(ones)))
     print("Unstable: {}".format(rn))
+
+    """ sparse tensor """
+    import numpy as np
+    batch = np.random.normal(0, 1, (5, 10, 10))
+    parallel_matching(batch)

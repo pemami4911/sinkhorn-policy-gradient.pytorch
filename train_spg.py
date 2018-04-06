@@ -22,8 +22,8 @@ from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from tensorboard_logger import configure, log_value, Logger
-from spg.models import SPGMLPActor, SPGRNNActor, SPGSiameseActor
-from spg.models import SPGMLPCritic, SPGRNNCritic, SPGSiameseCritic
+from spg.models import SPGSequentialActor, SPGMatchingActor
+from spg.models import SPGSequentialCritic, SPGMatchingCritic
 from spg.replay_buffer import ReplayBuffer
 import spg.util as util
 
@@ -52,9 +52,7 @@ parser.add_argument('--actor_lr_decay_rate', type=float, default=0.95)
 parser.add_argument('--critic_lr_decay_rate', type=float, default=0.95)
 parser.add_argument('--actor_lr_decay_step', type=int, default=50000)
 parser.add_argument('--critic_lr_decay_step', type=int, default=5000)
-parser.add_argument('--poisson_lambda', type=float, default=4)
-parser.add_argument('--poisson_decay_rate', type=float, default=0.95)
-parser.add_argument('--poisson_decay_step', type=int, default=500000)
+parser.add_argument('--k_exchange', type=int, default=2)
 parser.add_argument('--epsilon', type=float, default=1.)
 parser.add_argument('--epsilon_decay_rate', type=float, default=0.97)
 parser.add_argument('--epsilon_decay_step', type=int, default=500000)
@@ -71,6 +69,8 @@ parser.add_argument('--actor_workers', type=int, default=4)
 # CUDA
 parser.add_argument('--use_cuda', type=util.str2bool, default=True)
 parser.add_argument('--cuda_device', type=int, default=0)
+# Store the replay buffer on the GPU? For N <= 20 
+parser.add_argument('--replay_buffer_gpu', type=util.str2bool, default=True)
 # Misc
 parser.add_argument('--run_name', type=str, default='0')
 parser.add_argument('--base_dir', type=str, default='/media/pemami/DATA/sinkhorn-pg/')
@@ -122,20 +122,22 @@ def evaluate_model(args, count):
     else:
         # initialize RL model
         if args['arch'] == 'fc':
-            actor = SPGMLPActor(args['n_features'], args['n_nodes'], args['hidden_dim'],
-                    args['use_cuda'], args['sinkhorn_iters'], args['sinkhorn_tau'], args['alpha'])
-            critic = SPGMLPCritic(args['n_features'], args['n_nodes'], args['hidden_dim'])
+            print("Not supported")
+            exit(1)
+            #actor = SPGMLPActor(args['n_features'], args['n_nodes'], args['hidden_dim'],
+             #       args['use_cuda'], args['sinkhorn_iters'], args['sinkhorn_tau'], args['alpha'])
+            #critic = SPGMLPCritic(args['n_features'], args['n_nodes'], args['hidden_dim'])
         elif args['arch'] == 'rnn':
-            actor = SPGRNNActor(args['n_features'], args['n_nodes'], args['embedding_dim'],
+            actor = SPGSequentialActor(args['n_features'], args['n_nodes'], args['embedding_dim'],
                     args['rnn_dim'], args['sinkhorn_iters'],
                     args['sinkhorn_tau'], args['alpha'], args['actor_workers'], args['use_cuda'])
-            critic = SPGRNNCritic(args['n_features'], args['n_nodes'], args['embedding_dim'],
+            critic = SPGSequentialCritic(args['n_features'], args['n_nodes'], args['embedding_dim'],
                     args['rnn_dim'], args['use_cuda'])
         elif args['arch'] == 'siamese':
-            actor = SPGSiameseActor(args['n_features'], args['n_nodes'], args['embedding_dim'],
+            actor = SPGMatchingActor(args['n_features'], args['n_nodes'], args['embedding_dim'],
                 args['rnn_dim'], args['sinkhorn_iters'],  args['sinkhorn_tau'], args['alpha'],
                 args['actor_workers'], args['use_cuda'])
-            critic = SPGSiameseCritic(args['n_features'], args['n_nodes'], args['embedding_dim'],
+            critic = SPGMatchingCritic(args['n_features'], args['n_nodes'], args['embedding_dim'],
                 args['rnn_dim'], args['use_cuda'])
     args['save_dir'] = os.path.join(args['base_dir'], 'results', 'models', args['COP'], 'spg', args['arch'], args['_id'])    
     try:
@@ -191,9 +193,6 @@ def evaluate_model(args, count):
     num_steps_per_epoch = np.ceil(args['train_size'] / float(args['parallel_envs']))
     train_step = int(epoch * num_steps_per_epoch)
     eval_step = int(epoch * (np.ceil(args['test_size'] / float(args['parallel_envs']))))
-    poisson_lambda = args['poisson_lambda'] 
-    poisson_step = args['poisson_decay_step']
-    poisson_decay = ((poisson_lambda * args['poisson_decay_rate']) - poisson_lambda) / (poisson_step / float(args['parallel_envs']))
     epsilon = args['epsilon']
     epsilon_step = args['epsilon_decay_step']
     epsilon_decay = ((epsilon * args['epsilon_decay_rate']) - epsilon) / (epsilon_step / float(args['parallel_envs']))
@@ -246,6 +245,12 @@ def evaluate_model(args, count):
         mean_eval_R = np.mean(eval_R)
         stddev_eval_R = np.std(eval_R)
         mean_eval_birkhoff_dist = np.mean(eval_birkhoff_dist)
+        scores['_scores']['eval_avg_reward_{}'.format(train_step * args['parallel_envs'])] = mean_eval_R.item()
+        #scores['_scores']['eval_dist_to_nearest_vertex_{}'.format(train_step * args['parallel_envs'])] = mean_eval_birkhoff_dist.item()
+        eval_means.append(mean_eval_R.item())
+        eval_stddevs.append(stddev_eval_R.item())
+        if args['COP'] == 'mwm2D':
+            scores['_scores']['optimality_ratio_{}'.format(train_step * args['parallel_envs'])] = float(np.mean(ratios))
         if args['COP'] == 'mwm2D':
             print('avg. optimal matching weight: {:.4f}, ratio: {}'.format(mwm2D_opt, np.mean(ratios)))
         print('eval after {} train steps, got avg reward: {:.4f} and dist to nearest vertex of Birkhoff poly: {:.4f}'.format(
@@ -254,12 +259,6 @@ def evaluate_model(args, count):
             log_value('Eval avg reward', mean_eval_R, eval_step)
             log_value('Eval std reward', stddev_eval_R, eval_step)
             log_value('Eval dist to nearest vertex of Birkhoff poly', mean_eval_birkhoff_dist, eval_step)
-        scores['_scores']['eval_avg_reward_{}'.format(train_step * args['parallel_envs'])] = mean_eval_R.item()
-        #scores['_scores']['eval_dist_to_nearest_vertex_{}'.format(train_step * args['parallel_envs'])] = mean_eval_birkhoff_dist.item()
-        if args['COP'] == 'mwm2D':
-            scores['_scores']['optimality_ratio_{}'.format(train_step * args['parallel_envs'])] = float(np.mean(ratios))
-        eval_means.append(mean_eval_R.item())
-        eval_stddevs.append(stddev_eval_R.item())
         return eval_step
 
     for i in range(epoch, epoch + args['n_epochs']):
@@ -275,7 +274,7 @@ def evaluate_model(args, count):
             obs = Variable(obs, requires_grad=False)
             if args['use_cuda']:
                 obs = obs.cuda(async=True)
-            psi, action, X, dist = actor(obs)
+            psi, action, _, dist = actor(obs)
             if action is None: # Nan'd out
                 if args['save_stats']:   
                     scores['_scores']['eval_avg_reward_{}'.format(train_step * args['parallel_envs'])] = -1
@@ -285,10 +284,7 @@ def evaluate_model(args, count):
             # do epsilon greedy exploration
             if np.random.rand() < epsilon:
                 # Add noise in the form of 2-exchange neighborhoods
-                # number of row-exchanges 
-                #n_rows = np.random.poisson(poisson_lambda)
-                #for idx in range(args['parallel_envs']):
-                for r in range(2):
+                for r in range(args['k_exchange']):
                     # randomly choose two row idxs
                     idxs = np.random.randint(0, args['n_nodes'], size=2)
                     # swap the two rows
@@ -300,8 +296,6 @@ def evaluate_model(args, count):
                     action[:, idxs[1]] = tmp
                     psi[:, idxs[0]] = tmp4
                     psi[:, idxs[1]] = tmp3
-            if train_step > 0 and poisson_lambda > 1:
-                poisson_lambda += poisson_decay
             if train_step > 0 and epsilon > 0.01:
                 epsilon += epsilon_decay
             
@@ -326,9 +320,9 @@ def evaluate_model(args, count):
             
             if train_step % args['log_step'] == 0 and not DEBUG:
                 print('epoch: {}, step: {}, avg reward: {:.4f}, std dev: {:.4f}, min reward: {:.4f}, ' \
-                        'max reward: {:.4f}, poisson_lambda: {:.4f}, epsilon: {:.4f}, bd: {:.4f}'.format(
+                        'max reward: {:.4f}, epsilon: {:.4f}, bd: {:.4f}'.format(
                     i+1, train_step, np.mean(running_avg_R), np.std(running_avg_R), np.min(running_avg_R),
-                        np.max(running_avg_R), poisson_lambda, epsilon, np.mean(running_avg_bd))) 
+                        np.max(running_avg_R), epsilon, np.mean(running_avg_bd))) 
                 if args['COP'] == 'sort':
                     inn = []
                     out = []
@@ -342,26 +336,43 @@ def evaluate_model(args, count):
                 log_value('Running avg reward', np.mean(running_avg_R), train_step)
                 log_value('Running avg std dev', np.std(running_avg_R), train_step)
                 log_value('Closeness to nearest vertex of Birkhoff Poly', np.mean(running_avg_bd), train_step)
-                log_value('Action exploration Lambda', poisson_lambda, train_step)
-
-            replay_buffer.store(obs.data, psi.data, action.data, R.data)
+                log_value('Exploration $\epsilon$', epsilon, train_step)
+            if args['replay_buffer_gpu']:
+                replay_buffer.store(obs.data, psi.data, action.data.byte(), R.data)
+            else:
+                replay_buffer.store(obs.data.cpu(), psi.data.cpu(), action.data.byte().cpu(), R.data.cpu())
             
             # sample from replay buffer if possible
             if replay_buffer.size() > args['batch_size']:
                 s_batch, psi_batch, a_batch, r_batch = replay_buffer.sample_batch(args['batch_size'])
-                s_batch_t = Variable(torch.stack(s_batch))
-                psi_batch_t = Variable(torch.stack(psi_batch))
-                a_batch_t = Variable(torch.stack(a_batch)) # make sure it's disconnected from previous subgraph
-                targets = Variable(torch.stack(r_batch))
+
+                s_batch = torch.stack(s_batch)
+                psi_batch = torch.stack(psi_batch)
+                a_batch = torch.stack(a_batch).float()
+                targets = torch.stack(r_batch)
+                if not args['replay_buffer_gpu']:                
+                    s_batch.pin_memory()
+                    psi_batch.pin_memory()
+                    a_batch.pin_memory()
+                    targets.pin_memory()
+                if not args['replay_buffer_gpu'] and args['use_cuda']:
+                    s_batch = Variable(s_batch.cuda(async=True))
+                    psi_batch = Variable(psi_batch.cuda(async=True))
+                    a_batch = Variable(a_batch.cuda(async=True))
+                    targets = Variable(targets.cuda(async=True))
+                else:
+                    s_batch = Variable(s_batch)
+                    psi_batch = Variable(psi_batch)
+                    a_batch = Variable(a_batch)
+                    targets = Variable(targets)
                 # Compute Q(s_t, mu(s_t)=a_t)
                 # size is [batch_size, 1]
                 # N.B. We use the actions from the replay buffer to update the critic
                 # a_batch_t are the hard permutations
-                
-                hard_Q = critic(s_batch_t, a_batch_t).squeeze(2)
+                hard_Q = critic(s_batch, a_batch).squeeze(2)
                 critic_out = critic_loss(hard_Q, targets)
                 if not args['disable_critic_aux_loss']:
-                    soft_Q = critic(s_batch_t, psi_batch_t).squeeze(2)
+                    soft_Q = critic(s_batch, psi_batch).squeeze(2)
                     critic_aux_out = critic_aux_loss(soft_Q, hard_Q.detach())
                     critic_optim.zero_grad()
                     (critic_out + critic_aux_out).backward()
@@ -376,11 +387,11 @@ def evaluate_model(args, count):
                 
                 critic_optim.zero_grad()                
                 actor_optim.zero_grad()
-                soft_action, _, _, _ = actor(s_batch_t, do_round=False)
+                soft_action, _, _, _ = actor(s_batch, do_round=False)
                 # N.B. we use the action just computed from the actor net here, which 
                 # will be used to compute the actor gradients
                 # compute gradient of critic network w.r.t. actions, grad Q_a(s,a)
-                soft_critic_out = critic(s_batch_t, soft_action).squeeze(2).mean()
+                soft_critic_out = critic(s_batch, soft_action).squeeze(2).mean()
                 # penalty
                 actor_loss = -soft_critic_out
                 actor_loss.backward()

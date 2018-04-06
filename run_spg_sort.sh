@@ -1,8 +1,7 @@
 #!/bin/bash
 MODEL='spg'
 N_NODES=20
-ACTOR_WORKERS=2
-POISSON_LAMBDA=7
+ACTOR_WORKERS=4
 COP="sort_0-19"
 ARCH='rnn'
 RANDOM_SEED=$1
@@ -22,7 +21,7 @@ ACTOR_LR_DECAY_RATE=0.95
 CRITIC_LR_DECAY_RATE=0.95
 ACTOR_LR_DECAY_STEP=5000
 CRITIC_LR_DECAY_STEP=5000
-N_EPOCHS=15
+N_EPOCHS=20
 EPSILON=1.
 EPSILON_DECAY_RATE=0.95
 EPSILON_DECAY_STEP=$TRAIN_SIZE
@@ -38,10 +37,11 @@ EMBEDDING_DIM=128
 EPOCH_START=0
 USE_CUDA='True'
 CUDA_DEVICE=0
+REPLAY_BUFFER_GPU='False'
 #ACTOR_LOAD_PATH='results/models/5a7328085379c0568a8f253f/actor-epoch-667.pt'
 #CRITIC_LOAD_PATH='results/models/5a7328085379c0568a8f253f/critic-epoch-667.pt'
 BASE_DIR='.'
 DATA='icml2018'
 
-python train_spg.py --task $COP --arch $ARCH --train_size $TRAIN_SIZE --test_size $TEST_SIZE --batch_size $BATCH_SIZE --n_nodes $N_NODES --n_features $N_FEATURES --hidden_dim $HIDDEN_DIM --random_seed $RANDOM_SEED --run_name $RUN_NAME --disable_tensorboard $DISABLE_TENSORBOARD --actor_lr $ACTOR_LR --critic_lr $CRITIC_LR --n_epochs $N_EPOCHS --poisson_decay_rate $POISSON_DECAY_RATE --poisson_decay_step $POISSON_DECAY_STEP --buffer_size $BUFFER_SIZE --epsilon $EPSILON --epsilon_decay_rate $EPSILON_DECAY_RATE --epsilon_decay_step $EPSILON_DECAY_STEP --_id $ID --sinkhorn_iters $SINKHORN_ITERS --sinkhorn_tau $SINKHORN_TAU  --save_stats $SAVE_STATS --embedding_dim $EMBEDDING_DIM  --actor_lr_decay_rate $ACTOR_LR_DECAY_RATE --actor_lr_decay_step $ACTOR_LR_DECAY_STEP --critic_lr_decay_rate $CRITIC_LR_DECAY_RATE --critic_lr_decay_step $CRITIC_LR_DECAY_STEP --epoch_start $EPOCH_START --poisson_lambda $POISSON_LAMBDA --use_cuda $USE_CUDA --parallel_envs $PARALLEL_ENVS --cuda_device $CUDA_DEVICE --actor_workers $ACTOR_WORKERS --data $DATA --base_dir $BASE_DIR
+python train_spg.py --task $COP --arch $ARCH --train_size $TRAIN_SIZE --test_size $TEST_SIZE --batch_size $BATCH_SIZE --n_nodes $N_NODES --n_features $N_FEATURES --hidden_dim $HIDDEN_DIM --random_seed $RANDOM_SEED --run_name $RUN_NAME --disable_tensorboard $DISABLE_TENSORBOARD --actor_lr $ACTOR_LR --critic_lr $CRITIC_LR --n_epochs $N_EPOCHS --buffer_size $BUFFER_SIZE --epsilon $EPSILON --epsilon_decay_rate $EPSILON_DECAY_RATE --epsilon_decay_step $EPSILON_DECAY_STEP --_id $ID --sinkhorn_iters $SINKHORN_ITERS --sinkhorn_tau $SINKHORN_TAU  --save_stats $SAVE_STATS --embedding_dim $EMBEDDING_DIM  --actor_lr_decay_rate $ACTOR_LR_DECAY_RATE --actor_lr_decay_step $ACTOR_LR_DECAY_STEP --critic_lr_decay_rate $CRITIC_LR_DECAY_RATE --critic_lr_decay_step $CRITIC_LR_DECAY_STEP --epoch_start $EPOCH_START --use_cuda $USE_CUDA --parallel_envs $PARALLEL_ENVS --cuda_device $CUDA_DEVICE --actor_workers $ACTOR_WORKERS --data $DATA --base_dir $BASE_DIR --replay_buffer_gpu $REPLAY_BUFFER_GPU
 
