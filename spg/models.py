@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 import numpy as np
 import math
-from spg.layers import Sinkhorn, LayerNorm
+from spg.layers import Sinkhorn
 from spg.util import parallel_matching
 from sklearn.utils.linear_assignment_ import linear_assignment
 from pathos.multiprocessing import ProcessingPool as Pool
@@ -86,7 +86,6 @@ class SPGSequentialActor(nn.Module):
         """
         x is [batch_size, n_nodes, num_features]
         """
-        
         batch_size = x.size()[0]
         x = F.leaky_relu(self.embedding(x))
         x = torch.transpose(x, 0, 1)
@@ -102,23 +101,24 @@ class SPGSequentialActor(nn.Module):
             if np.any(np.isnan(batch)):
                 return None, None, None, None
             if self.num_workers > 0:
-                batches = np.split(batch, 4, 0)
+                batches = np.split(batch, self.num_workers, 0)
                 perms = self.pool.map(parallel_matching, batches)
                 perms = [p for pp in perms for p in pp]
             else:
+                perms = []
                 for i in range(batch_size):
-                    perm = torch.zeros(self.n_nodes, self.n_nodes)
+                    perm = torch.zeros(self.n_nodes, self.n_nodes)                   
                     matching = self.round(-batch[i])
                     perm[matching[:,0], matching[:,1]] = 1
                     perms.append(perm)
-            perms = Variable(torch.stack(perms), requires_grad=False)
+            perms = torch.stack(perms)
             if self.use_cuda:
                 perms = perms.cuda()
-            dist = torch.sum(torch.sum(psi * perms, dim=1), dim=1) / self.n_nodes
-            X = ((1 - self.alpha) * perms) + self.alpha * psi
-            return psi, perms, X, dist
+            #dist = torch.sum(torch.sum(psi * perms, dim=1), dim=1) / self.n_nodes
+            #X = ((1 - self.alpha) * perms) + self.alpha * psi
+            return psi, perms
         else:
-            return psi, None, None, None
+            return psi, None
 
 class SPGMatchingActor(nn.Module):
     def __init__(self, n_features, n_nodes, embedding_dim, rnn_dim,
@@ -143,8 +143,7 @@ class SPGMatchingActor(nn.Module):
 
     def cuda_after_load(self):
         self.init_hx = self.init_hx.cuda()
-        self.sinkhorn.cuda_after_load()
-
+    
     def forward(self, x, do_round=True):
         """
         x is [batch_size, 2 * n_nodes, num_features]
@@ -166,7 +165,6 @@ class SPGMatchingActor(nn.Module):
         M = self.fc1(h)
         psi = self.sinkhorn(M)
         if do_round:
-            perms = []
             batch = psi.data.cpu().numpy()
             if np.any(np.isnan(batch)):
                 return None, None, None, None
@@ -175,19 +173,21 @@ class SPGMatchingActor(nn.Module):
                 perms = self.pool.map(parallel_matching, batches)
                 perms = [p for pp in perms for p in pp]
             else:
+                perms = []
                 for i in range(batch_size):
                     perm = torch.zeros(self.n_nodes, self.n_nodes)
                     matching = self.round(-batch[i])
                     perm[matching[:,0], matching[:,1]] = 1
                     perms.append(perm)
-            perms = Variable(torch.stack(perms), requires_grad=False)
+            perms = torch.stack(perms).contiguous()
+            perms.pin_memory()
             if self.use_cuda:
-                perms = perms.cuda()
-            dist = torch.sum(torch.sum(psi * perms, dim=1), dim=1) / self.n_nodes
-            X = ((1 - self.alpha) * perms) + self.alpha * psi
-            return psi, perms, X, dist
+                perms = perms.cuda(async=True)
+            #dist = torch.sum(torch.sum(psi * perms, dim=1), dim=1) / self.n_nodes
+            #X = ((1 - self.alpha) * perms) + self.alpha * psi
+            return psi, perms
         else:
-            return psi, None, None, None
+            return psi, None
 
 #class SPGMLPCritic(nn.Module):
 #    def __init__(self, n_features, n_nodes, hidden_dim):

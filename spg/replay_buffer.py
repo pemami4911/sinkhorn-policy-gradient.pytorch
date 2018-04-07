@@ -17,12 +17,10 @@ class ReplayBuffer(object):
         self.count = 0
         self.buffer = deque()
         random.seed(random_seed)
-
+    
     def store(self, s, psi, a, r):
         batch_size = s.shape[0]
         for i in range(batch_size):
-            #if r[i] == 0.:
-            #    continue
             experience = (s[i], psi[i], a[i], r[i])
             if self.count < self.buffer_size: 
                 self.buffer.append(experience)

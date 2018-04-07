@@ -76,13 +76,15 @@ def parallel_matching(batch):
     perms = []
     (m, n, n) = batch.shape
     for i in range(m):
-        perm = torch.zeros(n,n)
-        #v = torch.ones(n)
-        #i = torch.from_numpy(linear_assignment(-batch[i])).long()
+        perm = torch.zeros(n, n)
         matching = linear_assignment(-batch[i])
         perm[matching[:,0], matching[:,1]] = 1
         perms.append(perm)
     return perms
+
+
+def memory_usage():
+    return ((int(open('/proc/self/statm').read().split()[1]) * 4096.) / 1000000.)
 
 if __name__ == '__main__': 
     torch.random.manual_seed(1)
@@ -98,8 +100,3 @@ if __name__ == '__main__':
 
     rn = torch.div(x , torch.matmul(torch.matmul(x,ones), torch.t(ones)))
     print("Unstable: {}".format(rn))
-
-    """ sparse tensor """
-    import numpy as np
-    batch = np.random.normal(0, 1, (5, 10, 10))
-    parallel_matching(batch)
