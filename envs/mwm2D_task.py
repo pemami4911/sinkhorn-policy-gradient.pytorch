@@ -127,11 +127,12 @@ def create_dataset(
 
 class MWM2DDataset(Dataset):
 
-    def __init__(self, data_dir, size, has_labels=False):
+    def __init__(self, data_dir, size, has_labels=False, sl=False):
         super(MWM2DDataset, self).__init__()
         self.has_labels = has_labels
         self.data_dir = data_dir
         self.size = size
+        self.sl = sl
 
     def __len__(self):
         return self.size
@@ -159,10 +160,12 @@ class MWM2DDataset(Dataset):
     
     def get_average_optimal_weight(self):
         opt = []
-        assert not self.has_labels
-        self.has_labels = True
+        #assert not self.has_labels
+        if not self.sl:
+            self.has_labels = True
         for i in tqdm(range(self.__len__())):
             sample = self.__getitem__(i)
             opt.append(sample['weight'])
-        self.has_labels = False
+        if not self.sl:
+            self.has_labels = False
         return np.mean(opt)

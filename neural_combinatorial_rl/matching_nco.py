@@ -219,7 +219,8 @@ class Decoder(nn.Module):
 class MatchingPointerNetwork(nn.Module):
     """The pointer network, which is the core seq2seq 
     model"""
-    def __init__(self, 
+    def __init__(self,
+            n_nodes,
             embedding_dim,
             hidden_dim,
             max_decoding_len,
@@ -232,13 +233,13 @@ class MatchingPointerNetwork(nn.Module):
         super(MatchingPointerNetwork, self).__init__()
 
         self.encoder = Encoder(
-                embedding_dim,
+                n_nodes,
                 hidden_dim,
                 use_cuda)
 
         self.decoder = Decoder(
                 embedding_dim,
-                hidden_dim * 2,
+                hidden_dim,
                 embedding_dim,
                 max_length=max_decoding_len,
                 tanh_exploration=tanh_exploration,
@@ -257,41 +258,140 @@ class MatchingPointerNetwork(nn.Module):
         self.decoder_in_0.data.uniform_(-(1. / math.sqrt(embedding_dim)),
                 1. / math.sqrt(embedding_dim))
             
-    def forward(self, inputs):
+    def forward(self, x, x2):
         """ Propagate inputs through the network
         Args: 
-            inputs: list of len 2 of [sourceL x batch_size x embedding_dim]
+            x: fused embeddings [batch_size, n, n]
+            x2: embedding graph 2, [batch_size, sourceL, embedding_dim]
         """
-        batch_size = inputs[0].size(1)        
+        batch_size = x.shape[0]
+        x = torch.transpose(x, 0, 1)
         (encoder_hx, encoder_cx) = self.encoder.enc_init_state
         encoder_hx = encoder_hx.unsqueeze(0).repeat(batch_size, 1).unsqueeze(0)       
         encoder_cx = encoder_cx.unsqueeze(0).repeat(batch_size, 1).unsqueeze(0)       
+        enc_h, (enc_h_t_i, enc_c_t_i) = self.encoder(x, (encoder_hx, encoder_cx))
         # encoder forward pass
-        enc_hidden = [[],[]]
-        enc_h = []
-        for i in range(2):
-            enc_h_i, (enc_h_t_i, enc_c_t_i) = self.encoder(inputs[i], (encoder_hx, encoder_cx))
-            enc_h.append(enc_h_i)
-            enc_hidden[0].append(enc_h_t_i[-1])
-            enc_hidden[1].append(enc_c_t_i[-1])
-        dec_init_state = (torch.cat(enc_hidden[0], 1), torch.cat(enc_hidden[1], 1))
-        enc_h = torch.cat(enc_h, 1)
+        #enc_hidden = [[],[]]
+        #enc_h = []
+        #for i in range(2):
+        #    enc_h_i, (enc_h_t_i, enc_c_t_i) = self.encoder(inputs[i], (encoder_hx, encoder_cx))
+        #    enc_h.append(enc_h_i)
+        #    enc_hidden[0].append(enc_h_t_i[-1])
+        #    enc_hidden[1].append(enc_c_t_i[-1])
+        dec_init_state = (enc_h_t_i[-1], enc_c_t_i[-1])
         # repeat decoder_in_0 across batch
         decoder_input = self.decoder_in_0.unsqueeze(0).repeat(batch_size, 1)
-        (pointer_probs, input_idxs), dec_hidden_t = self.decoder(decoder_input,
-                inputs[1],
+        (pointer_probs, input_idxs), dec_hidden_t = self.decoder(
+                decoder_input,
+                torch.transpose(x2, 0, 1),
                 dec_init_state,
                 enc_h)
 
         return pointer_probs, input_idxs
+
+class MatchingNoDecoder(nn.Module):
+    def __init__(self, n_nodes, input_dim, embedding_dim, hidden_dim, use_cuda):
+        super(MatchingNoDecoder, self).__init__()
+        self.embedding = nn.Linear(input_dim, embedding_dim)
+        self.to_logits = nn.Linear(hidden_dim, n_nodes)
+        self.encoder = nn.GRU(n_nodes, hidden_dim)
+        self.n_nodes = n_nodes
+        self.init_hx = Variable(torch.zeros(1, hidden_dim), requires_grad=False)
+        self.sm = nn.Softmax()
+        self.decode = "stochastic"
+        self.mask_logits = True
+        self.use_cuda = use_cuda
+        if use_cuda:
+            self.init_hx = self.init_hx.cuda()
+    
+    def apply_mask_to_logits(self, step, logits, mask, prev_idxs):    
+         if mask is None:
+             mask = torch.zeros(logits.size()).byte()
+         if self.use_cuda:
+            mask = mask.cuda()
+         maskk = mask.clone()
+         # to prevent them from being reselected. 
+         if prev_idxs is not None:
+             maskk[[x for x in range(logits.size(0))],
+                     prev_idxs.data] = 1
+             logits[maskk] = -np.inf
+         return logits, maskk
+    
+    def decode_type(self, dt):
+        self.decode = dt
+    
+    def forward(self, x):
+        batch_size = x.shape[0]
+        x1 = torch.transpose(x[:, :, 0:self.n_nodes], 2, 1)
+        x2 = torch.transpose(x[:, :, self.n_nodes:self.n_nodes*2], 2, 1)
+        x1 = F.leaky_relu(self.embedding(x1))
+        x2 = F.leaky_relu(self.embedding(x2))
+        xx = torch.bmm(x1, torch.transpose(x2, 1, 2))
+        xx = torch.transpose(xx, 0, 1)
+        xx = torch.chunk(xx, self.n_nodes, 0)
+        h = self.init_hx.unsqueeze(1).repeat(1, batch_size, 1)
         
+        logit_mask = None
+        idxs = None
+        selections = []
+        probs = []
+        
+        for i in range(self.n_nodes):
+            enc_h, h = self.encoder(xx[i], h)
+            # Need something extra here?
+            logits = 10 * F.tanh(self.to_logits(enc_h.squeeze()))
+            if self.mask_logits: 
+                masked_logits, logit_mask = self.apply_mask_to_logits(i, logits.clone(), logit_mask, idxs)
+                soft_probs = self.sm(masked_logits)
+            else:
+                soft_probs = self.sm(logits)
+            if self.decode == "stochastic":
+                # idxs is [batch_size]
+                idxs = soft_probs.multinomial().squeeze(1)
+                # due to race conditions, might need to resample here
+                if self.mask_logits:
+                    for old_idxs in selections:
+                        # compare new idxs
+                        # elementwise with the previous idxs. If any matches,
+                        # then need to resample
+                        if old_idxs.eq(idxs).data.any():
+                            print(' [!] resampling due to race condition')
+                            idxs = probs.multinomial().squeeze(1)
+                            break
+            else:
+                _, idxs = soft_probs.max(1)
+            selections.append(idxs)
+            probs.append(soft_probs)
+        # Select the actions (inputs pointed to 
+        # by the pointer net) and the corresponding
+        # logits
+        # should be size [batch_size x 
+        actions = []
+        # x is [batch_size, input_dim, sourceL]
+        x_ = torch.transpose(x[:, :, self.n_nodes:self.n_nodes*2], 1, 2)
+        # x_ is [batch_size, sourceL, input_dim]
+        for action_id in selections:
+            actions.append(x_[[x for x in range(batch_size)], action_id.data, :])
+
+        #if self.is_train:
+        # logits_ is a list of len sourceL of [batch_size x sourceL]
+        probs_ = []
+        for p, action_id in zip(probs, selections):
+            probs_.append(p[[x for x in range(batch_size)], action_id.data])
+        #else:
+            # return the list of len sourceL of [batch_size x sourceL]
+        #    probs_ = probs
+
+        return probs_, actions, selections, torch.stack(probs)
+
 class MatchingNeuralCombOptRL(nn.Module):
     """
     This module contains the PointerNetwork (actor) and
     CriticNetwork (critic). It requires
     an application-specific reward function
     """
-    def __init__(self, 
+    def __init__(self,
+            n_nodes,
             input_dim,
             embedding_dim,
             hidden_dim,
@@ -310,6 +410,7 @@ class MatchingNeuralCombOptRL(nn.Module):
         self.use_cuda = use_cuda
         
         self.actor_net = MatchingPointerNetwork(
+                n_nodes,
                 embedding_dim,
                 hidden_dim,
                 max_decoding_len,
@@ -320,13 +421,17 @@ class MatchingNeuralCombOptRL(nn.Module):
                 beam_size,
                 use_cuda)
        
-        embedding_ = torch.FloatTensor(input_dim,
-            embedding_dim)
-        if self.use_cuda: 
-            embedding_ = embedding_.cuda()
-        self.embedding = nn.Parameter(embedding_) 
-        self.embedding.data.uniform_(-(1. / math.sqrt(embedding_dim)),
-            1. / math.sqrt(embedding_dim))
+        #embedding_ = torch.FloatTensor(input_dim,
+        #    embedding_dim)
+        #if self.use_cuda: 
+        #    embedding_ = embedding_.cuda()
+        #self.embedding = nn.Parameter(embedding_) 
+        #self.embedding.data.uniform_(-(1. / math.sqrt(embedding_dim)),
+        #    1. / math.sqrt(embedding_dim))
+        self.embedding = nn.Linear(input_dim, embedding_dim)
+    
+    def decode_type(self, dt):
+        self.actor_net.decoder.decode_type = dt
 
     def forward(self, inputs):
         """
@@ -336,28 +441,37 @@ class MatchingNeuralCombOptRL(nn.Module):
         batch_size = inputs.size(0)
         input_dim = inputs.size(1)
         sourceL = int(inputs.size(2)/2)
-        x = (inputs[:, :, 0 : sourceL], inputs[:, :, sourceL:sourceL * 2])
+        x1 = torch.transpose(inputs[:, :, 0:sourceL], 2, 1)
+        x2 = torch.transpose(inputs[:, :, sourceL:sourceL*2], 2, 1)
+        #x = (inputs[:, :, 0 : sourceL], inputs[:, :, sourceL:sourceL * 2])
         # repeat embeddings across batch_size
         # result is [batch_size x input_dim x embedding_dim]
-        embedding = self.embedding.repeat(batch_size, 1, 1)  
-        embedded_inputs = [[], []]
+        #embedding = self.embedding.repeat(batch_size, 1, 1)  
+        #embedded_inputs = [[], []]
         # result is [batch_size, 1, input_dim, sourceL] 
-        for i in range(2):           
-            ips = x[i].unsqueeze(1)
-            for j in range(sourceL):
-                # [batch_size x 1 x input_dim] * [batch_size x input_dim x embedding_dim]
-                # result is [batch_size, embedding_dim]
-                embedded_inputs[i].append(torch.bmm(
-                    ips[:, :, :, j].float(),
-                    embedding).squeeze(1))
-            # Result is [sourceL x batch_size x embedding_dim]
-            embedded_inputs[i] = torch.cat(embedded_inputs[i]).view(
-                    sourceL,
-                    batch_size,
-                    embedding.size(2))
+        #for i in range(2):           
+        #    ips = x[i].unsqueeze(1)
+        #    for j in range(sourceL):
+        #        # [batch_size x 1 x input_dim] * [batch_size x input_dim x embedding_dim]
+        #        # result is [batch_size, embedding_dim]
+        #        embedded_inputs[i].append(torch.bmm(
+        #            ips[:, :, :, j].float(),
+        #            embedding).squeeze(1))
+        #    # Result is [sourceL x batch_size x embedding_dim]
+        #    embedded_inputs[i] = torch.cat(embedded_inputs[i]).view(
+        #            sourceL,
+        #            batch_size,
+        #            embedding.size(2))
+
+        # Result is [batch_size, sourceL, embedding_dim]
+        x1 = F.leaky_relu(self.embedding(x1))
+        x2 = F.leaky_relu(self.embedding(x2))
+        # Do the outer product here
+        # [batch_size, sourceL, sourceL)
+        fused_embedding = torch.bmm(x1, torch.transpose(x2, 1, 2))
         # query the actor net for the input indices 
         # making up the output, and the pointer attn 
-        probs_, action_idxs = self.actor_net(embedded_inputs)
+        probs_, action_idxs = self.actor_net(fused_embedding, x2)
        
         # Select the actions (inputs pointed to 
         # by the pointer net) and the corresponding
@@ -384,4 +498,4 @@ class MatchingNeuralCombOptRL(nn.Module):
         #v = self.critic_net(embedded_inputs)
         # [batch_size]
         #R = self.objective_fn(actions, self.use_cuda)
-        return probs, actions, action_idxs
+        return probs, actions, action_idxs, torch.stack(probs_)
