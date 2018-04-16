@@ -41,11 +41,11 @@ def build(args, epoch):
             random_seed=args['random_seed'],
             sl=args['sl'],
             only=args['make_only'])
-        test_dataset = mwm2D_task.MWM2DDataset(test_dir, args['test_size'], has_labels=args['sl'])           
-        training_dataset = mwm2D_task.MWM2DDataset(train_dir, args['train_size'], has_labels=args['sl'])
+        test_dataset = mwm2D_task.MWM2DDataset(test_dir, args['test_size'], has_labels=args['sl'], sl=args['sl'])           
+        training_dataset = mwm2D_task.MWM2DDataset(train_dir, args['train_size'], has_labels=args['sl'], sl=args['sl'])
         #if args['val_size'] > 0:
         #    val_dataset = mwm2D_task.MWM2DDataset(val_dir, args['val_size'], has_labels=args['sl'])
-        if args['model'] == 'nco':
+        if args['model'] == 'nco' or args['arch'] == 'pnac':
             env = mwm2D_task.reward_nco
         else:
             env = mwm2D_task.reward

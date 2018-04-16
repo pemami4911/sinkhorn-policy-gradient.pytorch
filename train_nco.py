@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 from tensorboard_logger import configure, log_value
 
 from neural_combinatorial_rl.neural_combinatorial_rl import NeuralCombOptRL
-from neural_combinatorial_rl.matching_nco import MatchingNeuralCombOptRL
+from neural_combinatorial_rl.matching_nco import MatchingNeuralCombOptRL, MatchingNoDecoder
 from envs import dataset
 
 def str2bool(v):
@@ -42,6 +42,7 @@ parser.add_argument('--dropout', default=0., help='')
 parser.add_argument('--terminating_symbol', default='<0>', help='')
 parser.add_argument('--beam_size', default=1, help='Beam width for beam search')
 # Training
+parser.add_argument('--use_decoder', type=str2bool, default=False)
 parser.add_argument('--actor_net_lr', default=1e-4, help="Set the learning rate for the actor network")
 parser.add_argument('--critic_net_lr', default=1e-4, help="Set the learning rate for the critic network")
 parser.add_argument('--actor_lr_decay_step', default=5000, help='')
@@ -60,6 +61,7 @@ parser.add_argument('--use_KT', type=str2bool, default=True)
 parser.add_argument('--log_step', default=50, help='Log info every log_step steps')
 parser.add_argument('--log_dir', type=str, default='results/logs')
 parser.add_argument('--run_name', type=str, default='0')
+parser.add_argument('--base_dir', type=str, default='/data/pemami/spg/')
 parser.add_argument('--output_dir', type=str, default='outputs')
 parser.add_argument('--epoch_start', type=int, default=0, help='Restart at epoch #')
 parser.add_argument('--load_path', type=str, default='')
@@ -73,6 +75,8 @@ parser.add_argument('--sl', type=str2bool, default=False)
 parser.add_argument('--use_graph', type=str2bool, default=False)
 parser.add_argument('--make_only', type=int, default=3)
 parser.add_argument('--num_workers', type=int, default=0)
+parser.add_argument('--cuda_device', type=int, default=0)
+parser.add_argument('--data', type=str, default='icml2018')
 
 args = vars(parser.parse_args())
 args['model'] = 'nco'
@@ -83,21 +87,25 @@ args['n_nodes'] = args['input_size']
 # Set the random seed
 torch.manual_seed(int(args['random_seed']))
 
+torch.cuda.device(args['cuda_device'])
+
 # Optionally configure tensorboard
 args['run_name'] = args['_id'][-6:] + '-' + args['run_name']    
 if not args['disable_tensorboard']:
-    configure(os.path.join(args['log_dir'], args['task'], args['run_name']))
+    configure(os.path.join(args['base_dir'], args['log_dir'], args['task'], args['run_name']))
 
 args['test_size'] = args['val_size']
 # Task specific configuration - generate dataset if needed
 task = args['task'].split('_')
 args['COP'] = task[0]  # the combinatorial optimization problem
-args, env, training_dataloader, validation_dataloader = dataset.build(args, args['epoch_start'])
+args, env, training_dataloader, test_dataloader = dataset.build(args, args['epoch_start'])
+if args['COP'] == 'mwm2D':
+    mwm2D_opt = test_dataloader.dataset.get_average_optimal_weight()
 
 # Open files for writing results
 if args['save_stats']:
-    fglab_results_dir = os.path.join('results', 'fglab', args['model'], args['COP'], args['_id'])
-    raw_results_dir = os.path.join('results', 'raw', args['model'], args['COP'], args['_id'])
+    fglab_results_dir = os.path.join(args['base_dir'], 'results', 'fglab', args['model'], args['COP'], args['_id'])
+    raw_results_dir = os.path.join(args['base_dir'], 'results', 'raw', args['model'], args['COP'], args['_id'])
     try:
         os.makedirs(fglab_results_dir)
         os.makedirs(raw_results_dir)
@@ -115,23 +123,33 @@ if os.path.exists(args['load_path']):
             os.getcwd(),
             args['load_path']
         ))
-    model.actor_net.decoder.max_length = args['input_size']
+    #model.actor_net.decoder.max_length = args['input_size']
     model.is_train = args['is_train']
 else:
     if args['COP'] == 'mwm2D':
-        model = MatchingNeuralCombOptRL(
-            args['n_features'],
-            int(args['embedding_dim']),
-            int(args['hidden_dim']),
-            args['input_size'], # decoder len
-            args['terminating_symbol'],
-            int(args['n_glimpses']),
-            int(args['n_process_blocks']), 
-            float(args['tanh_exploration']),
-            args['use_tanh'],
-            int(args['beam_size']),
-            args['is_train'],
-            args['use_cuda'])
+        if args['use_decoder']:
+            model = MatchingNeuralCombOptRL(
+                args['input_size'],
+                args['n_features'],
+                int(args['embedding_dim']),
+                int(args['hidden_dim']),
+                args['input_size'], # decoder len
+                args['terminating_symbol'],
+                int(args['n_glimpses']),
+                int(args['n_process_blocks']), 
+                float(args['tanh_exploration']),
+                args['use_tanh'],
+                int(args['beam_size']),
+                args['is_train'],
+                args['use_cuda'])
+        else:
+            model = MatchingNoDecoder(
+                    args['input_size'],
+                    args['n_features'],
+                    args['embedding_dim'],
+                    args['hidden_dim'],
+                    args['use_cuda'])
+            model.mask_logits = True
     else:
         # Instantiate the Neural Combinatorial Opt with RL module
         model = NeuralCombOptRL(
@@ -148,7 +166,7 @@ else:
             args['is_train'],
             args['use_cuda'])
 
-args['save_dir'] = os.path.join('results', 'models', args['model'], args['COP'], args['_id'])    
+args['save_dir'] = os.path.join(args['base_dir'], 'results', 'models', args['model'], args['COP'], args['_id'])    
 try:
     os.makedirs(args['save_dir'])
 except:
@@ -156,7 +174,7 @@ except:
 
 #critic_mse = torch.nn.MSELoss()
 #critic_optim = optim.Adam(model.critic_net.parameters(), lr=float(args['critic_net_lr']))
-actor_optim = optim.Adam(model.actor_net.parameters(), lr=float(args['actor_net_lr']))
+actor_optim = optim.Adam(model.parameters(), lr=float(args['actor_net_lr']))
 actor_scheduler = lr_scheduler.MultiStepLR(actor_optim,
         range(int(args['actor_lr_decay_step']), int(args['actor_lr_decay_step']) * 1000,
             int(args['actor_lr_decay_step'])), gamma=float(args['actor_lr_decay_rate']))
@@ -182,7 +200,8 @@ epoch = int(args['epoch_start'])
 
 def eval(val_step, final=False):
     # Use (greedy) beam search decoding for validation
-    model.actor_net.decoder.decode_type = "greedy"
+    #model.actor_net.decoder.decode_type = "greedy"
+    model.decode_type("greedy")
     print('\nstarting eval\n')
     example_input = []
     example_output = []
@@ -191,17 +210,13 @@ def eval(val_step, final=False):
     optimal = []
     # put in test mode!
     model.eval()
-    for batch_id, obs in enumerate(tqdm(validation_dataloader,
+    for batch_id, obs in enumerate(tqdm(test_dataloader,
             disable=args['disable_progress_bar'])):
-        if args['COP'] == 'mwm2D':
-            optimal_weight = obs['weight'].numpy()
-            optimal.append(optimal_weight)
-            obs = obs['x']
-        obs = Variable(obs)
+        obs = Variable(obs, requires_grad=False)
         if args['use_cuda']:
             obs = obs.cuda()
         obs = torch.transpose(obs, 2, 1)
-        probs, actions, action_idxs = model(obs)
+        probs, actions, action_idxs, _ = model(obs)
         if args['COP'] == 'sort':
             R = env(actions, args['use_KT'], args['use_cuda'])
         elif args['COP'] == 'mwm2D':
@@ -213,7 +228,7 @@ def eval(val_step, final=False):
         else:
             R = env(actions, args['use_cuda'])
         eval_R.append(R.data.cpu().numpy())
-        val_step += 1.
+        val_step += 1
         if val_step % int(args['log_step']) == 0:
             # example_output = []
             # example_input = []
@@ -231,13 +246,13 @@ def eval(val_step, final=False):
             #     plot_attention(example_input,
             #             example_output, probs.data.cpu().numpy())
         if args['COP'] == 'mwm2D':
-            ratios.append(R.data.cpu().numpy() / optimal_weight)
+            ratios.append(R.data.cpu().numpy() / mwm2D_opt)
     eval_R = np.array(eval_R).ravel()
-    if args['COP'] == 'sort':
-        # Count how many 1's in eval_R
-        per_incorrectly_sorted = (len(eval_R) - sum(eval_R == -1.))/(len(eval_R)) * 100.
-        print('percent incorrectly sorted: {}'.format(per_incorrectly_sorted))
-        scores['_scores']['percent_incorrectly_sorted_{}'.format(step * args['batch_size'])] = float(per_incorrectly_sorted)        
+    #if args['COP'] == 'sort':
+    #    # Count how many 1's in eval_R
+    #    per_incorrectly_sorted = (len(eval_R) - sum(eval_R == -1.))/(len(eval_R)) * 100.
+    #    print('percent incorrectly sorted: {}'.format(per_incorrectly_sorted))
+    #    scores['_scores']['percent_incorrectly_sorted_{}'.format(step * args['batch_size'])] = float(per_incorrectly_sorted)        
     mean_eval_R = np.mean(eval_R)
     std_eval_R = np.std(eval_R)
     print('Validation overall avg_reward: {}'.format(mean_eval_R))
@@ -248,28 +263,25 @@ def eval(val_step, final=False):
     scores['_scores']['eval_avg_reward_{}'.format(step * args['batch_size'])] = float(mean_eval_R)
     #scores['_scores']['eval_std_reward_{}'.format(step * args['batch_size'])] = float(std_eval_R)
     if args['COP'] == 'mwm2D':
-        print('Average optimal MWM: {}'.format(np.mean(optimal)))
+        print('Average optimal MWM: {}'.format(mwm2D_opt))
         scores['_scores']['optimality_ratio_{}'.format(step * args['batch_size'])] = float(np.mean(ratios))
-    model.actor_net.decoder.decode_type = "stochastic"
+    model.decode_type("stochastic")
     return val_step 
 
 for i in range(epoch, epoch + int(args['n_epochs'])):
     if args['is_train']:
         # eval at 0 
         val_step = eval(val_step)
-        print('training with {} policy'.format(model.actor_net.decoder.decode_type))
         # put in train mode!
         model.train()
         # sample_batch is [batch_size x input_dim x sourceL]
         for batch_id, obs in enumerate(tqdm(training_dataloader,
                 disable=args['disable_progress_bar'])):
-            if args['COP'] == 'mwm2D':
-                obs = obs['x']
-            obs = Variable(obs)
+            obs = Variable(obs, requires_grad=False)
             if args['use_cuda']:
                 obs = obs.cuda()
             obs = torch.transpose(obs, 2, 1)
-            probs, actions, actions_idxs = model(obs)
+            probs, actions, actions_idxs, _ = model(obs)
             if args['COP'] == 'sort':
                 R = env(actions, args['use_KT'], args['use_cuda'])
             elif args['COP'] == 'mwm2D':
@@ -292,19 +304,19 @@ for i in range(epoch, epoch + int(args['n_epochs'])):
                 # compute the sum of the log probs
                 # for each tour in the batch
                 logprob = torch.log(prob)
-                nll += -logprob
-                logprobs += logprob
+                nll += -logprob.detach()
+                logprobs = logprobs + logprob
             # guard against nan
-            nll[nll != nll] = 0.
+            #nll[nll != nll] = 0.
             # clamp any -inf's to 0 to throw away this tour
-            logprobs[logprobs < -1000] = 0.
+            #logprobs[logprobs < -1000] = 0.
             # multiply each time step by the advanrate
-            reinforce = advantage * logprobs
+            reinforce = advantage.detach() * logprobs
             actor_loss = reinforce.mean()
             actor_optim.zero_grad()
             actor_loss.backward()
             # clip gradient norms
-            torch.nn.utils.clip_grad_norm(model.actor_net.parameters(),
+            torch.nn.utils.clip_grad_norm(model.parameters(),
                     float(args['max_grad_norm']), norm_type=2)
             actor_optim.step()
             actor_scheduler.step()
@@ -341,10 +353,6 @@ for i in range(epoch, epoch + int(args['n_epochs'])):
         if args['save_model']:
             print(' [*] saving model...')
             torch.save(model, os.path.join(args['save_dir'], 'nco-COP-{}-N-{}-epoch-{}.pt'.format(args['COP'], args['input_size'], i)))   
-        # load next training dataset
-        if i < epoch + int(args['n_epochs']) - 1:
-             # generate new training data
-             _, _, training_dataloader, _ = dataset.build(args, i+1, True)
 # Eval one last time
 val_step = eval(val_step, True)
 

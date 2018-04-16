@@ -59,6 +59,7 @@ parser.add_argument('--epsilon_decay_rate', type=float, default=0.97)
 parser.add_argument('--epsilon_decay_step', type=int, default=500000)
 parser.add_argument('--embedding_dim', type=int, default=128)
 parser.add_argument('--rnn_dim', type=int, default=128)
+parser.add_argument('--bidirectional', type=util.str2bool, default=True)
 # Training cfg options here
 parser.add_argument('--n_epochs', type=int, default=10)
 parser.add_argument('--random_seed', type=int, default=1234)
@@ -99,7 +100,7 @@ DEBUG = False
 def evaluate_model(args, count):
     # Pretty print the run args
     pp.pprint(args)
- 
+
     if not args['disable_tensorboard'] and count == 0:
         # append last 6 digits of experiment id to run name
         args['run_name'] = args['_id'][-6:] + '-' + args['run_name']
@@ -131,10 +132,10 @@ def evaluate_model(args, count):
             #critic = SPGMLPCritic(args['n_features'], args['n_nodes'], args['hidden_dim'])
         elif args['arch'] == 'rnn':
             actor = SPGSequentialActor(args['n_features'], args['n_nodes'], args['embedding_dim'],
-                    args['rnn_dim'], args['sinkhorn_iters'],
+                    args['rnn_dim'], args['bidirectional'], args['sinkhorn_iters'],
                     args['sinkhorn_tau'], args['alpha'], args['actor_workers'], args['use_cuda'])
             critic = SPGSequentialCritic(args['n_features'], args['n_nodes'], args['embedding_dim'],
-                    args['rnn_dim'], args['use_cuda'])
+                    args['rnn_dim'], args['bidirectional'],  args['use_cuda'])
         elif args['arch'] == 'siamese':
             actor = SPGMatchingActor(args['n_features'], args['n_nodes'], args['embedding_dim'],
                 args['rnn_dim'], args['sinkhorn_iters'],  args['sinkhorn_tau'], args['alpha'],
@@ -231,6 +232,8 @@ def evaluate_model(args, count):
             if args['COP'] == 'sort' or args['COP'] == 'tsp':
                 # apply the permutation to the input
                 solutions = torch.matmul(torch.transpose(obs, 1, 2), action)
+                if args['COP'] == 'tsp':
+                    solutions = torch.transpose(solutions, 1, 2)
                 R = env(solutions, args['use_cuda'])
             elif args['COP'] == 'mwm2D':
                 matchings = torch.matmul(torch.transpose(obs[:,args['n_nodes']:2*args['n_nodes'],:], 1, 2), action)
@@ -309,6 +312,8 @@ def evaluate_model(args, count):
             if args['COP'] == 'sort' or args['COP'] == 'tsp':
                 # apply the permutation to the input
                 solutions = torch.matmul(torch.transpose(obs, 1, 2), action)
+                if args['COP'] == 'tsp':
+                    solutions = torch.transpose(solutions, 1, 2)
                 R = env(solutions, args['use_cuda'])
             elif args['COP'] == 'mwm2D':
                 matchings = torch.matmul(torch.transpose(obs[:,args['n_nodes']:2*args['n_nodes'],:], 1, 2), action)

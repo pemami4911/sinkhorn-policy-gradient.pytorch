@@ -483,6 +483,9 @@ class NeuralCombOptRL(nn.Module):
         self.embedding.data.uniform_(-(1. / math.sqrt(embedding_dim)),
             1. / math.sqrt(embedding_dim))
 
+    def decode_type(self, dt):
+        self.actor_net.decoder.decode_type = dt
+
     def forward(self, inputs):
         """
         Args:
