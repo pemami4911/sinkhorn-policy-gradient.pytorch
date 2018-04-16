@@ -87,18 +87,15 @@ def create_dataset(
     ctr = 0
     for idx in trange(train_size + val_size + test_size):
         x = torch.FloatTensor(4, N).uniform_(0, 1)
-        if sl or idx > train_size:
-            # x is a (N, 2, 2)
+        if sl or idx >= train_size:
             x_ = x.numpy()
             # compute reward matrix C to maximize
             C = np.zeros((N,N))
             for i in range(N):
                 for j in range(N):
                     C[i,j] = np.linalg.norm(x_[2:4, i] - x_[0:2, j], ord=2)
-            if maximal:
-                C = -C
-            # Find the optimal matching
-            max_matching = linear_assignment(C)
+                # Find the optimal matching
+            max_matching = linear_assignment(-C)
             weight = np.sum(C[max_matching[:,0], max_matching[:,1]])                
             if idx < train_size and (only == -1 or only == 0):
                 sample = to_string(x, (max_matching[:,1], weight))
@@ -115,8 +112,6 @@ def create_dataset(
                 fp = open(os.path.join(test_dir, '{}.txt'.format(ctr - (train_size + val_size))), 'w')
                 fp.write(sample)
                 fp.close()
-            else:
-                ctr -= 1
         else:
             sample = to_string(x)
             fp = open(os.path.join(train_dir, '{}.txt'.format(ctr)), 'w')
