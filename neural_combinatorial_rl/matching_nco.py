@@ -297,7 +297,7 @@ class MatchingNoDecoder(nn.Module):
         self.encoder = nn.GRU(n_nodes, hidden_dim)
         self.n_nodes = n_nodes
         self.init_hx = Variable(torch.zeros(1, hidden_dim), requires_grad=False)
-        self.sm = nn.Softmax()
+        self.sm = nn.LogSoftmax()
         self.decode = "stochastic"
         self.mask_logits = True
         self.use_cuda = use_cuda
@@ -347,7 +347,7 @@ class MatchingNoDecoder(nn.Module):
                 soft_probs = self.sm(logits)
             if self.decode == "stochastic":
                 # idxs is [batch_size]
-                idxs = soft_probs.multinomial().squeeze(1)
+                idxs = torch.exp(soft_probs).multinomial().squeeze(1)
                 # due to race conditions, might need to resample here
                 if self.mask_logits:
                     for old_idxs in selections:
@@ -356,7 +356,7 @@ class MatchingNoDecoder(nn.Module):
                         # then need to resample
                         if old_idxs.eq(idxs).data.any():
                             print(' [!] resampling due to race condition')
-                            idxs = probs.multinomial().squeeze(1)
+                            idxs = torch.exp(soft_probs).multinomial().squeeze(1)
                             break
             else:
                 _, idxs = soft_probs.max(1)
