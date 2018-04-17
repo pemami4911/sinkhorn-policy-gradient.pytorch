@@ -87,7 +87,7 @@ args['n_nodes'] = args['input_size']
 # Set the random seed
 torch.manual_seed(int(args['random_seed']))
 
-torch.cuda.device(args['cuda_device'])
+torch.cuda.set_device(args['cuda_device'])
 
 # Optionally configure tensorboard
 args['run_name'] = args['_id'][-6:] + '-' + args['run_name']    
@@ -264,6 +264,7 @@ def eval(val_step, final=False):
     #scores['_scores']['eval_std_reward_{}'.format(step * args['batch_size'])] = float(std_eval_R)
     if args['COP'] == 'mwm2D':
         print('Average optimal MWM: {}'.format(mwm2D_opt))
+        print('Average optimality ratio: {}'.format(np.mean(ratios)))
         scores['_scores']['optimality_ratio_{}'.format(step * args['batch_size'])] = float(np.mean(ratios))
     model.decode_type("stochastic")
     return val_step 
@@ -298,19 +299,23 @@ for i in range(epoch, epoch + int(args['n_epochs'])):
             else:
                 critic_exp_mvg_avg = (critic_exp_mvg_avg * beta) + ((1. - beta) * R.mean())
             advantage = R - critic_exp_mvg_avg
-            logprobs = 0
-            nll = 0
-            for prob in probs: 
-                # compute the sum of the log probs
-                # for each tour in the batch
-                logprob = torch.log(prob)
-                nll += -logprob.detach()
-                logprobs = logprobs + logprob
-            # guard against nan
-            #nll[nll != nll] = 0.
-            # clamp any -inf's to 0 to throw away this tour
-            #logprobs[logprobs < -1000] = 0.
-            # multiply each time step by the advanrate
+            if not args['use_decoder']:
+                logprobs = torch.stack(probs).sum(dim=0)
+                nll = -logprobs.detach()
+            else:
+                logprobs = 0
+                nll = 0
+                for prob in probs: 
+                    # compute the sum of the log probs
+                    # for each tour in the batch
+                    logprob = torch.log(prob)
+                    nll += -logprob.detach()
+                    logprobs = logprobs + logprob
+                # guard against nan
+                #nll[nll != nll] = 0.
+                # clamp any -inf's to 0 to throw away this tour
+                #logprobs[logprobs < -1000] = 0.
+                # multiply each time step by the advanrate
             reinforce = advantage.detach() * logprobs
             actor_loss = reinforce.mean()
             actor_optim.zero_grad()
