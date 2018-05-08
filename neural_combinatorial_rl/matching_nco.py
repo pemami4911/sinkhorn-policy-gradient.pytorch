@@ -101,12 +101,13 @@ class Decoder(nn.Module):
          #    logits = logits.cuda()
          return logits, maskk
 
-    def forward(self, decoder_input, embedded_inputs, hidden, context):
+    def forward(self, decoder_input, embedded_x1, embedded_x2, hidden, context):
          """
          Args:
              decoder_input: The initial input to the decoder
                  size is [batch_size x embedding_dim]. Trainable parameter.
-             embedded_inputs: [sourceL x batch_size x embedding_dim]
+             embedded_x1: [sourceL x batch_size x embedding_dim]
+             embedded_x2: [sourceL x batch_size x embedding_dim]
              hidden: the prev hidden state, size is [batch_size x hidden_dim]. 
                  Initially this is set to (enc_h[-1], enc_c[-1])
              context: encoder outputs, [sourceL x batch_size x hidden_dim] 
@@ -153,14 +154,15 @@ class Decoder(nn.Module):
                      fn = self.decode_stochastic
                  elif self.decode_type == "greedy":
                      fn = self.decode_greedy
-                 decoder_input, idxs = fn(
+                 x2_selects, idxs = fn(
                      probs,
-                     embedded_inputs,
+                     embedded_x2,
                      selections)
-                 inps.append(decoder_input) 
+                 inps.append(x2_selects) 
                  # use outs to point to next object
                  outputs.append(probs)
                  selections.append(idxs)
+                 decoder_input = torch.cat([embedded_x1[i], x2_selects], dim=1)
              return (outputs, selections), hidden
 
     def decode_stochastic(self, probs, embedded_inputs, selections):
@@ -191,7 +193,6 @@ class Decoder(nn.Module):
                  print(' [!] resampling due to race condition')
                  idxs = probs.multinomial().squeeze(1)
                  break
-
          sels = embedded_inputs[idxs.data, [i for i in range(batch_size)], :] 
          return sels, idxs
 
@@ -236,9 +237,9 @@ class MatchingPointerNetwork(nn.Module):
                 n_nodes,
                 hidden_dim,
                 use_cuda)
-
+        
         self.decoder = Decoder(
-                embedding_dim,
+                2 * embedding_dim,
                 hidden_dim,
                 embedding_dim,
                 max_length=max_decoding_len,
@@ -251,20 +252,20 @@ class MatchingPointerNetwork(nn.Module):
                 use_cuda=use_cuda)
 
         # Trainable initial input to the decoders
-        dec_in_0 = torch.FloatTensor(embedding_dim)
+        dec_in_0 = torch.FloatTensor(2 * embedding_dim)
         if use_cuda:
             dec_in_0 = dec_in_0.cuda()
         self.decoder_in_0 = nn.Parameter(dec_in_0)
-        self.decoder_in_0.data.uniform_(-(1. / math.sqrt(embedding_dim)),
-                1. / math.sqrt(embedding_dim))
+        self.decoder_in_0.data.uniform_(-(1. / math.sqrt(2 * embedding_dim)),
+                1. / math.sqrt(2 * embedding_dim))
             
-    def forward(self, x, x2):
+    def forward(self, x, x1, x2):
         """ Propagate inputs through the network
         Args: 
             x: fused embeddings [batch_size, n, n]
             x2: embedding graph 2, [batch_size, sourceL, embedding_dim]
         """
-        batch_size = x.shape[0]
+        batch_size = x.size(0)
         x = torch.transpose(x, 0, 1)
         (encoder_hx, encoder_cx) = self.encoder.enc_init_state
         encoder_hx = encoder_hx.unsqueeze(0).repeat(batch_size, 1).unsqueeze(0)       
@@ -283,6 +284,7 @@ class MatchingPointerNetwork(nn.Module):
         decoder_input = self.decoder_in_0.unsqueeze(0).repeat(batch_size, 1)
         (pointer_probs, input_idxs), dec_hidden_t = self.decoder(
                 decoder_input,
+                torch.transpose(x1, 0, 1),
                 torch.transpose(x2, 0, 1),
                 dec_init_state,
                 enc_h)
@@ -321,7 +323,7 @@ class MatchingNoDecoder(nn.Module):
         self.decode = dt
     
     def forward(self, x):
-        batch_size = x.shape[0]
+        batch_size = x.size(0)
         x1 = torch.transpose(x[:, :, 0:self.n_nodes], 2, 1)
         x2 = torch.transpose(x[:, :, self.n_nodes:self.n_nodes*2], 2, 1)
         x1 = F.leaky_relu(self.embedding(x1))
@@ -471,7 +473,7 @@ class MatchingNeuralCombOptRL(nn.Module):
         fused_embedding = torch.bmm(x1, torch.transpose(x2, 1, 2))
         # query the actor net for the input indices 
         # making up the output, and the pointer attn 
-        probs_, action_idxs = self.actor_net(fused_embedding, x2)
+        probs_, action_idxs = self.actor_net(fused_embedding, x1, x2)
        
         # Select the actions (inputs pointed to 
         # by the pointer net) and the corresponding

@@ -190,6 +190,8 @@ class SPGMatchingActor(nn.Module):
         else:
             return psi, None
 
+SPGSiameseActor = SPGMatchingActor
+
 #class SPGMLPCritic(nn.Module):
 #    def __init__(self, n_features, n_nodes, hidden_dim):
 #        super(SPGMLPCritic, self).__init__()
