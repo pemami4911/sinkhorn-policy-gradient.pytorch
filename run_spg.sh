@@ -1,5 +1,4 @@
 #!/bin/bash
-MODEL='spg'
 N_NODES=20
 ACTOR_WORKERS=4
 COP="mwm2D_$N_NODES"
