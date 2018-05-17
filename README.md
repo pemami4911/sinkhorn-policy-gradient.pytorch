@@ -25,7 +25,7 @@ Create a directory called `data` in the base directory of the repo, and unzip th
 
 ## Running the experiments
 
-To run an experiment, modify the arguments in the `run_spg.sh` file. I prefer this format as an extra layer over `argparse` so you don't have to deal with long lists of command line arguments. I will briefly explain the variables here:
+To run an experiment, modify the variables in the `run_spg.sh` file. I prefer this extra layer over `argparse` so you don't have to deal with typing the long list of command line arguments. I will briefly explain the important variables here:
 
 * `N_NODES` Sets the problem size.
 * `ACTOR_WORKERS` The number of cores to split the batch of problem instances across for parallel Hungarian method.
