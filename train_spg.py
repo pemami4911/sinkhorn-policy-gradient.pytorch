@@ -42,11 +42,9 @@ parser.add_argument('--test_size', type=int, default=10000)
 # Model cfg options here
 parser.add_argument('--n_features', type=int, default=2)
 parser.add_argument('--n_nodes', type=int, default=10)
-parser.add_argument('--hidden_dim', type=int, default=128)
 parser.add_argument('--arch', type=str, default='rnn')
 parser.add_argument('--sinkhorn_iters', type=int, default=10)
 parser.add_argument('--sinkhorn_tau', type=float, default=0.05)
-parser.add_argument('--alpha', type=float, default=1.)
 parser.add_argument('--actor_lr', type=float, default=3e-4)
 parser.add_argument('--critic_lr', type=float, default=3e-4)
 parser.add_argument('--actor_lr_decay_rate', type=float, default=0.95)
@@ -76,7 +74,6 @@ parser.add_argument('--replay_buffer_gpu', type=util.str2bool, default=True)
 # Misc
 parser.add_argument('--run_name', type=str, default='0')
 parser.add_argument('--base_dir', type=str, default='/media/pemami/DATA/sinkhorn-pg/')
-parser.add_argument('--data', type=str, default='icml2018')
 parser.add_argument('--epoch_start', type=int, default=0, help='Restart at epoch #')
 parser.add_argument('--save_model', type=util.str2bool, default=False, help='Save after epoch')
 parser.add_argument('--save_stats', type=util.str2bool, default=True)
@@ -125,20 +122,17 @@ def evaluate_model(args, count):
     else:
         # initialize RL model
         if args['arch'] == 'fc':
-            print("Not supported")
+            print("Architecture not supported")
             exit(1)
-            #actor = SPGMLPActor(args['n_features'], args['n_nodes'], args['hidden_dim'],
-             #       args['use_cuda'], args['sinkhorn_iters'], args['sinkhorn_tau'], args['alpha'])
-            #critic = SPGMLPCritic(args['n_features'], args['n_nodes'], args['hidden_dim'])
-        elif args['arch'] == 'rnn':
+        elif args['arch'] == 'sequential':
             actor = SPGSequentialActor(args['n_features'], args['n_nodes'], args['embedding_dim'],
                     args['rnn_dim'], args['bidirectional'], args['sinkhorn_iters'],
-                    args['sinkhorn_tau'], args['alpha'], args['actor_workers'], args['use_cuda'])
+                    args['sinkhorn_tau'], args['actor_workers'], args['use_cuda'])
             critic = SPGSequentialCritic(args['n_features'], args['n_nodes'], args['embedding_dim'],
                     args['rnn_dim'], args['bidirectional'],  args['use_cuda'])
-        elif args['arch'] == 'siamese':
+        elif args['arch'] == 'matching':
             actor = SPGMatchingActor(args['n_features'], args['n_nodes'], args['embedding_dim'],
-                args['rnn_dim'], args['sinkhorn_iters'],  args['sinkhorn_tau'], args['alpha'],
+                args['rnn_dim'], args['sinkhorn_iters'],  args['sinkhorn_tau'], 
                 args['actor_workers'], args['use_cuda'])
             critic = SPGMatchingCritic(args['n_features'], args['n_nodes'], args['embedding_dim'],
                 args['rnn_dim'], args['use_cuda'])
@@ -224,11 +218,9 @@ def evaluate_model(args, count):
             obs = Variable(obs, volatile=True)
             if args['use_cuda']:
                 obs = obs.cuda(async=True)
-            #_,  action, _, dist = actor(obs)
             psi, action = actor(obs)
             action = Variable(action, volatile=True)
             dist = torch.sum(torch.sum(psi * action, dim=1), dim=1) / args['n_nodes']
-            #X = ((1 - self.alpha) * perms2) + self.alpha * psi
             if args['COP'] == 'sort' or args['COP'] == 'tsp':
                 # apply the permutation to the input
                 solutions = torch.matmul(torch.transpose(obs, 1, 2), action)
@@ -268,6 +260,7 @@ def evaluate_model(args, count):
             log_value('Eval dist to nearest vertex of Birkhoff poly', mean_eval_birkhoff_dist, eval_step)
         return eval_step
 
+    i = 0
     for i in range(epoch, epoch + args['n_epochs']):
         eval_step = eval(eval_step)
         if args['save_model']:
@@ -398,7 +391,6 @@ def evaluate_model(args, count):
                 # will be used to compute the actor gradients
                 # compute gradient of critic network w.r.t. actions, grad Q_a(s,a)
                 soft_critic_out = critic(s_batch, soft_action).squeeze(2).mean()
-                # penalty
                 actor_loss = -soft_critic_out
                 actor_loss.backward()
 

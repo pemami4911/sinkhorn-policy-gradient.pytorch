@@ -9,49 +9,6 @@ from spg.util import parallel_matching
 from sklearn.utils.linear_assignment_ import linear_assignment
 from pathos.multiprocessing import ProcessingPool as Pool
 
-#class SPGMLPActor(nn.Module):
-#    """
-#    Saw slightly slower performance using ThreadPoolExecutor. The GIL!
-#
-#    """
-#    def __init__(self, n_features, n_nodes, hidden_dim, 
-#            sinkhorn_iters=5, sinkhorn_tau=1, alpha=1., cuda=True):
-#        super(SPGMLPActor, self).__init__()
-#        self.use_cuda = cuda
-#        self.n_nodes = n_nodes
-#        self.alpha = alpha
-#        self.fc1 = nn.Linear(n_features, hidden_dim)
-#        self.fc2 = nn.Linear(hidden_dim, n_nodes)
-#        self.sinkhorn = Sinkhorn(n_nodes, sinkhorn_iters, sinkhorn_tau)
-#        self.bn1 = nn.BatchNorm1d(n_nodes)
-#        self.bn2 = nn.BatchNorm1d(n_nodes)
-#        self.round = linear_assignment
-#
-#    def forward(self, x, do_round=True):
-#        # [N, n_nodes, hidden_dim]
-#        batch_size = x.size()[0]
-#        x = F.leaky_relu(self.fc1(x))
-#        M = F.leaky_relu(self.fc2(x))
-#        psi = self.sinkhorn(M)
-#        if do_round:
-#            perms = []
-#            batch = psi.data.cpu().numpy()
-#            if np.any(np.isnan(batch)):
-#                return None, None, None, None
-#            for i in range(batch_size):
-#                perm = torch.zeros(self.n_nodes, self.n_nodes)
-#                matching = self.round(-batch[i])
-#                perm[matching[:,0], matching[:,1]] = 1
-#                perms.append(perm)
-#            perms = Variable(torch.stack(perms), requires_grad=False)
-#            if self.use_cuda:
-#                perms = perms.cuda()
-#            dist = torch.sum(torch.sum(psi * perms, dim=1), dim=1) / self.n_nodes
-#            X = ((1 - self.alpha) * perms) + self.alpha * psi 
-#            return psi, perms, X, dist
-#        else:
-#            return psi, None, None, None
-
 class SPGSequentialActor(nn.Module):
     """
     Embeds the input, then an RNN maps it to an intermediate representation
@@ -59,11 +16,10 @@ class SPGSequentialActor(nn.Module):
 
     """
     def __init__(self, n_features, n_nodes, embedding_dim, rnn_dim, bidirectional=True,
-            sinkhorn_iters=5, sinkhorn_tau=1, alpha=1., num_workers=4, cuda=True):
+            sinkhorn_iters=5, sinkhorn_tau=1, num_workers=4, cuda=True):
         super(SPGSequentialActor, self).__init__()
         self.use_cuda = cuda
         self.n_nodes = n_nodes
-        self.alpha = alpha
         self.embedding_dim = embedding_dim
         self.rnn_dim = rnn_dim
         self.num_workers = num_workers
@@ -116,19 +72,17 @@ class SPGSequentialActor(nn.Module):
             if self.use_cuda:
                 perms = perms.cuda()
             #dist = torch.sum(torch.sum(psi * perms, dim=1), dim=1) / self.n_nodes
-            #X = ((1 - self.alpha) * perms) + self.alpha * psi
             return psi, perms
         else:
             return psi, None
 
 class SPGMatchingActor(nn.Module):
     def __init__(self, n_features, n_nodes, embedding_dim, rnn_dim,
-            sinkhorn_iters=5, sinkhorn_tau=1., alpha=1., num_workers=4, cuda=True):
+            sinkhorn_iters=5, sinkhorn_tau=1., num_workers=4, cuda=True):
         super(SPGMatchingActor, self).__init__()
         self.use_cuda = cuda
         self.n_nodes = n_nodes
         self.rnn_dim = rnn_dim
-        self.alpha = alpha
         self.num_workers = num_workers
         self.embedding = nn.Linear(n_features, embedding_dim)
         self.gru = nn.GRU(n_nodes, rnn_dim)
@@ -185,41 +139,11 @@ class SPGMatchingActor(nn.Module):
             if self.use_cuda:
                 perms = perms.cuda(async=True)
             #dist = torch.sum(torch.sum(psi * perms, dim=1), dim=1) / self.n_nodes
-            #X = ((1 - self.alpha) * perms) + self.alpha * psi
             return psi, perms
         else:
             return psi, None
 
 SPGSiameseActor = SPGMatchingActor
-
-#class SPGMLPCritic(nn.Module):
-#    def __init__(self, n_features, n_nodes, hidden_dim):
-#        super(SPGMLPCritic, self).__init__()
-#        self.fc1 = nn.Linear(n_features, hidden_dim)
-#        self.fc2 = nn.Linear(n_nodes, hidden_dim)
-#        self.fc3 = nn.Linear(hidden_dim, hidden_dim)
-#        self.fc4 = nn.Linear(hidden_dim, hidden_dim)
-#        self.combine = nn.Linear(hidden_dim, hidden_dim)
-#        self.bn1 = nn.BatchNorm1d(n_nodes)
-#        self.bn2 = nn.BatchNorm1d(n_nodes)
-#        self.bn3 = nn.BatchNorm1d(n_nodes)
-#        # output layer
-#        self.out1 = nn.Linear(hidden_dim, 1)
-#        self.out2 = nn.Linear(n_nodes, 1)
-#
-#    def forward(self, x, p):
-#        # x has dim [batch, n, nhid1]
-#        x = F.leaky_relu(self.bn1(self.fc1(x)))
-#        # p has dim [batch, n, nhid1]
-#        p = F.leaky_relu(self.bn2(self.fc2(p)))
-#        # combine x and p
-#        # output xp has dimension [batch, n, nhid1]
-#        xp = F.leaky_relu(self.bn3(self.combine(x + p)))
-#        # output is [batch, n, 1]
-#        xp = self.out1(xp)
-#        # output is [batch, 1], Q(s,a)
-#        out = self.out2(torch.transpose(xp, 2, 1))
-#        return out
 
 class SPGSequentialCritic(nn.Module):
     def __init__(self, n_features, n_nodes, embedding_dim, rnn_dim, bidirectional=True, cuda=True):

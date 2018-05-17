@@ -5,6 +5,7 @@ logs/
 .vscode/
 .ipynb_checkpoints/
 sigopt/
+deep_assign/
 
 # Files
 *.pyc
