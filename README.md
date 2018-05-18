@@ -6,12 +6,12 @@ This repository contains code accompanying [Learning Permutations with Sinkhorn 
 
 SPG is an off-policy actor-critic deterministic policy gradient algorithm. It can be used to train the SPG+Matching and SPG+Sequential deep network architectures from the paper to solve combinatorial optimization problems involving permutations. 
 
-![SPG+Matching(spg_arch.png)
+![SPG+Matching](spg_arch.png)
 
 ## Dependencies
 
 * [PyTorch](https://pytorch.org)
-    * Tested with versions 0.2/cuda80 and 0.3.1 with cuda90
+    * Tested with versions 0.2 with cuda80 and 0.3.1 with cuda90
 * h5py
 * tqdm
 * tensorboard_logger
@@ -27,11 +27,11 @@ For sorting and Euclidean TSP, a train and test dataset will automatically be cr
 
 ## Running the experiments
 
-To run an experiment, modify the arguments in the `run_spg.sh` file. I prefer this format as an extra layer over `argparse` so you don't have to deal with long lists of command line arguments. I will briefly explain the variables here:
+To run an experiment, modify the variables in the `run_spg.sh` file. I prefer this extra layer over `argparse` so you don't have to deal with typing the long list of command line arguments. I will briefly explain the important variables here:
 
 * `N_NODES` Sets the problem size.
 * `N_FEATURES` Feature dimension of problem instance.
-* `COP` The Combinatorial Optimization Problem. Choose from {mwm2D_$N_NODES, sort_0-19, sort_0-49, tsp_$N_NODES}.
+* `COP` The **C**ombinatorial **O**ptimization **P**roblem. Choose from {mwm2D_$N_NODES, sort_0-19, sort_0-49, tsp_$N_NODES}.
 * `ACTOR_WORKERS` The number of cores to split the batch of problem instances across for parallel Hungarian method.
 * `ARCH` Choose from {sequential, matching}.
 * `RANDOM_SEED` Passed as CLI argument to `run_spg.sh`, e.g, `./run_spg.sh 1234`.
@@ -43,12 +43,12 @@ To run an experiment, modify the arguments in the `run_spg.sh` file. I prefer th
 * `RNN_DIM` Hidden layer dim for the GRU. Automatically doubled for the bidirectional GRU in SPG+Sequential.
 * `CUDA_DEVICE` Set the GPU device ID, default is 0.
 * `REPLAY_BUFFER_GPU` Store the replay buffer on the GPU or on the CPU (requires passing more tensors back and forth but can use system RAM).
-* `SAVE_STATS` Store rewards to a h5py file and store test scores to a json file for FGLab.
+* `SAVE_STATS` Store rewards to a h5py file and store test scores to a json file for [FGLab](https://kaixhin.github.io/FGLab/).
 * `SAVE_MODEL` Save model weights after each epoch.
 * `BASE_DIR` The directory where logs, models, fglab results, etc. will be saved.
 * `MAKE_ONLY` [mwm2D] `-1` make all `0` only train `1` only test `2` only val `3` make none (default)
 
-I have `--_id` set up with argparse for [FGMachine](TODO).
+I have `--_id` set up with argparse for [FGMachine](https://github.com/Kaixhin/FGMachine).
 
 ### Examples
 
