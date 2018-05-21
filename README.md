@@ -1,6 +1,6 @@
 # sinkhorn-policy-gradient.pytorch
 
-This repository contains code accompanying [Learning Permutations with Sinkhorn Policy Gradient](TODO) that can be used to replicate the experiments for sorting with N={20,50}, maximum weight matching with N={10,15,20,25}, and the Euclidean TSP with N=20. 
+This repository contains code accompanying [Learning Permutations with Sinkhorn Policy Gradient](https://arxiv.org/abs/1805.07010) that can be used to replicate the experiments for sorting with N={20,50}, maximum weight matching with N={10,15,20,25}, and the Euclidean TSP with N=20. 
 
 ## What is Sinkhorn Policy Gradient? 
 
@@ -27,8 +27,11 @@ For sorting and Euclidean TSP, a train and test dataset will automatically be cr
 
 ## Running the experiments
 
-To run an experiment, modify the variables in the `run_spg.sh` file. I prefer this extra layer over `argparse` so you don't have to deal with typing the long list of command line arguments. I will briefly explain the important variables here:
+To run an experiment, modify the variables in the `run_spg.sh` or `run_nco.sh` file. I prefer this extra layer around `argparse` so you don't have to deal with typing the long list of command line arguments. I will briefly explain the important variables here.
 
+N.B. I have `--_id` set up with argparse for [FGMachine](https://github.com/Kaixhin/FGMachine).
+
+### SPG (run_spg.sh)
 * `N_NODES` Sets the problem size.
 * `N_FEATURES` Feature dimension of problem instance.
 * `COP` The **C**ombinatorial **O**ptimization **P**roblem. Choose from {mwm2D_$N_NODES, sort_0-19, sort_0-49, tsp_$N_NODES}.
@@ -48,9 +51,7 @@ To run an experiment, modify the variables in the `run_spg.sh` file. I prefer th
 * `BASE_DIR` The directory where logs, models, fglab results, etc. will be saved.
 * `MAKE_ONLY` [mwm2D] `-1` make all `0` only train `1` only test `2` only val `3` make none (default)
 
-I have `--_id` set up with argparse for [FGMachine](https://github.com/Kaixhin/FGMachine).
-
-### Examples
+#### SPG Examples
 
 sort-20:
 ```
@@ -76,23 +77,39 @@ COP="tsp_$N_NODES"
 ARCH='sequential'
 ```
 
+### PN-AC, PN-AC+Matching, AC+Matching (run_nco.sh)
+* `INPUT_SIZE` Sets the problem size.
+* `TASK` Equivalent to `COP`.
+* `USE_DECODER` Set to `True` for PN-AC (non-matching tasks) and PN-AC+Matching (matching tasks), and `False` for AC+Matching.
+* `N_GLIMPSES` The glimpse attention module in the pointer network. Default is 1 "glimpse" over the input sequence.
+* `USE_TANH` Apply `tanh` and multiply the logits by 10 in the attention layer in the pointer network, from Bello et. al. 2017.
+* `CRITIC_BETA` EMA beta hyperparameter. Default is 0.8.
+
+## Adding new environments
+
+See the `env` directory and create a new file `yournewenv_task.py` that follows the structure of `sorting_task.py`. Basically, there should be a `create_dataset(...)` function, an `EnvDataset` class extending `Dataset`, and a `reward` function. Then, modify `envs/dataset.py` so that, if the `COP` or `TASK` is set to the name of the new env, the `build(args, ...)` function in `envs/dataset.py` will appropriately set the `env`, `training_dataloader`, and `test_dataloader` variables that it returns from `yournewenv_task.py`. The `env` variable here is just an alias for `yournewenv_task.reward`. 
+
 ## Licensing
 
-Please read and respect the license :)
+Please read and respect the license. :)
 
 ## Citations
 
 Use this citation for the paper: 
 
 ```
-TODO
+@article{emami2018learning,
+   title = {Learning Permutations with Sinkhorn Policy Gradient},
+   author = {Emami, Patrick and Ranka, Sanjay},
+   journal = {arXiv:1805.07010 [cs.LG]},
+   year = {2018}
 ```
 
 If you use or modify this code for your work, please use the following citation:
 
 ```
 @misc{emami2018spg,
-  title = {{sinkhorn-policy-gradient.pytorch}}, 
+  title = {sinkhorn-policy-gradient.pytorch}, 
   author = {Emami, Patrick and Ranka, Sanjay},
   howpublished = {\url{https://github.com/pemami4911/sinkhorn-policy-gradient.pytorch}},
   note = {Accessed: [Insert date here]}
