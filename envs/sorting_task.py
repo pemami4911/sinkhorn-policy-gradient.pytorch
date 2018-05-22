@@ -43,28 +43,6 @@ def reward_nco(sample_solution, use_KT, use_cuda=False):
     else:
         return -reward_ddpg_C(solutions.permute(1, 2, 0), use_cuda, True)
 
-def reward_gcn(solution, use_cuda):
-    """
-    solution is FloatTensor of dim [1,n]
-    """
-    sourceL = solution.size()[1]
-    
-    longest = Variable(torch.ones(1), requires_grad=False)
-    current = Variable(torch.ones(1), requires_grad=False)
-    random_baseline = Variable(torch.FloatTensor([0.3]))
-    if use_cuda:
-        longest = longest.cuda()
-        current = current.cuda()
-        random_baseline = random_baseline.cuda()
-    for i in range(1, sourceL):
-        res = torch.lt(solution[0, i-1], solution[0, i])
-        current += res.float()
-        current[torch.eq(res, 0)] = 1
-        mask = torch.gt(current, longest)
-        longest[mask] = current[mask]
-
-    return torch.div(longest, sourceL)
-
 def reward_ddpg_A(solution, use_cuda):
     """
     Count number of consecutively correctly sorted for each sample in minibatch
@@ -143,6 +121,9 @@ def reward_ddpg_C(solution, use_cuda, nco=False):
     return torch.div(longest, m)
 
 def reward_ddpg_D(solution, use_cuda):
+    """
+    Kendall-Tau correlation coefficient
+    """
     (batch_size, n, m) = solution.size()
     if use_cuda:
         solution = solution.data.cpu().numpy()
@@ -279,42 +260,3 @@ class SortingDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.data_set[idx]
-
-if __name__ == '__main__':
-    if int(sys.argv[1]) == 0:
-        sample = Variable(torch.Tensor([[3, 2, 1, 4, 5]])) 
-        #sample = [Variable(torch.Tensor([3,2])), Variable(torch.Tensor([2,3])), Variable(torch.Tensor([1,5])),
-        #        Variable(torch.Tensor([4, 1])), Variable(torch.Tensor([5, 4]))]
-        answer = torch.Tensor([3/5.])
-
-        res = reward_no_batch(sample, False)
-
-        print('Expected answer: {}, Actual answer: {}'.format(answer, res.data))
-        """
-        sample = Variable(torch.Tensor([[1, 2, 3, 4, 5], [5, 4, 3, 2, 1]])) 
-        answer = torch.Tensor([1., 1/5])
-
-        res = reward(sample)
-
-        print('Expected answer: {}, Actual answer: {}'.format(answer, res.data))
-        
-        sample = Variable(torch.Tensor([[1, 2, 5, 4, 3], [4, 1, 2, 3, 5]])) 
-        answer = torch.Tensor([3/5., 4/5])
-
-        res = reward(sample)
-
-        print('Expected answer: {}, Actual answer: {}'.format(answer, res.data))
-        """
-    elif int(sys.argv[1]) == 1:
-        data_dir = '/home/pemami/Workspace/deep-assign/data/sort/icml2018'
-        N = [10, 15, 20, 25]
-        for n in N:
-            create_dataset(500000, 10000, data_dir, 666, 0, n-1, True, 3)
-    
-    elif int(sys.argv[1]) == 2:
-
-        sorting_data = SortingDataset('data', 'sorting-size-1000-len-10-train.txt',
-            'sorting-size-100-len-10-val.txt')
-        for i in range(len(sorting_data)):
-            print(sorting_data[i])
-

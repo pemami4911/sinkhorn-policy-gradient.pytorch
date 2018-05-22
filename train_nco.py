@@ -76,7 +76,6 @@ parser.add_argument('--use_graph', type=str2bool, default=False)
 parser.add_argument('--make_only', type=int, default=3)
 parser.add_argument('--num_workers', type=int, default=0)
 parser.add_argument('--cuda_device', type=int, default=0)
-parser.add_argument('--data', type=str, default='icml2018')
 
 args = vars(parser.parse_args())
 args['model'] = 'nco'

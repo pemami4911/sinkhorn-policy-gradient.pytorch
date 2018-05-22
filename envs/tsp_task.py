@@ -315,10 +315,3 @@ class TSPDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.data_set[idx]
-    
-if __name__ == '__main__':
-    #paths = download_google_drive_file('data/tsp', 'tsp', '', '50')
-    data_dir='/home/pemami/Workspace/deep-assign/data/tsp/icml2018/'
-    create_dataset(500000, 1000, data_dir, 15, 0, False, 10)
-    create_dataset(500000, 1000, data_dir, 20, 0, False, 10)
-    create_dataset(500000, 1000, data_dir, 25, 0, False, 10)
