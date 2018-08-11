@@ -27,7 +27,7 @@ class SPGSequentialActor(nn.Module):
         self.gru = nn.GRU(embedding_dim, rnn_dim, bidirectional=bidirectional)
         scale = 2 if bidirectional else 1
         self.fc2 = nn.Linear(scale * self.rnn_dim, n_nodes)
-        self.sinkhorn = Sinkhorn(n_nodes, sinkhorn_iters, sinkhorn_tau)
+        self.sinkhorn = Sinkhorn(sinkhorn_iters, sinkhorn_tau)
         self.round = linear_assignment
         init_hx = torch.zeros(scale, self.rnn_dim)
         if cuda:
@@ -76,6 +76,71 @@ class SPGSequentialActor(nn.Module):
         else:
             return psi, None
 
+class SPGMatchingActorV2(nn.Module):
+    def __init__(self, n_features, n_nodes, embedding_dim, rnn_dim,
+            sinkhorn_iters=5, sinkhorn_tau=1., num_workers=4, cuda=True):
+        super(SPGMatchingActor, self).__init__()
+        self.use_cuda = cuda
+        self.rnn_dim = rnn_dim
+        self.num_workers = num_workers
+        self.gru = nn.GRU(n_features, rnn_dim)
+        self.sinkhorn = Sinkhorn(sinkhorn_iters, sinkhorn_tau)
+        self.round = linear_assignment
+        init_hx = torch.zeros(1, self.rnn_dim)
+        if cuda:
+            init_hx = init_hx.cuda()
+        self.init_hx = Variable(init_hx, requires_grad=False)
+        if num_workers > 0:
+            self.pool = Pool(num_workers)
+
+    def cuda_after_load(self):
+        self.init_hx = self.init_hx.cuda()
+    
+    def forward(self, x, do_round=True):
+        """
+        x is [batch_size, 2 * n_nodes, num_features]
+        """
+        batch_size, n_nodes, n_features= x.size()
+        n_nodes /= 2
+        # split x into G1 and G2
+        # g1,g2 are [batch_size, n_nodes, num_features]
+        g1 = x[:,0:n_nodes,:]
+        g2 = x[:,n_nodes:2*n_nodes,:]
+        g1 = torch.transpose(g1, 0, 1)
+        g2 = torch.transpose(g2, 0, 1)
+        init_hx = self.init_hx.unsqueeze(1).repeat(1, batch_size, 1)
+        # h is [n_nodes, batch_size, rnn_dim]
+        h1, _ = self.gru(g1, init_hx)
+        h2, _ = self.gru(g2, init_hx)
+        h1 = torch.transpose(h1, 0, 1)
+        h2 = torch.transpose(h2, 0, 1)
+        # take outer product, result is [batch_size, n_nodes, n_nodes]
+        x = torch.bmm(h2, torch.transpose(h1, 2, 1))
+        psi = self.sinkhorn(x)
+        if do_round:
+            batch = psi.data.cpu().numpy()
+            if np.any(np.isnan(batch)):
+                return None, None, None, None
+            if self.num_workers > 0:
+                batches = np.split(batch, self.num_workers, 0)
+                perms = self.pool.map(parallel_matching, batches)
+                perms = [p for pp in perms for p in pp]
+            else:
+                perms = []
+                for i in range(batch_size):
+                    perm = torch.zeros(n_nodes, n_nodes)
+                    matching = self.round(-batch[i])
+                    perm[matching[:,0], matching[:,1]] = 1
+                    perms.append(perm)
+            perms = torch.stack(perms).contiguous()
+            perms.pin_memory()
+            if self.use_cuda:
+                perms = perms.cuda(async=True)
+            #dist = torch.sum(torch.sum(psi * perms, dim=1), dim=1) / self.n_nodes
+            return psi, perms
+        else:
+            return psi, None
+
 class SPGMatchingActor(nn.Module):
     def __init__(self, n_features, n_nodes, embedding_dim, rnn_dim,
             sinkhorn_iters=5, sinkhorn_tau=1., num_workers=4, cuda=True):
@@ -87,14 +152,14 @@ class SPGMatchingActor(nn.Module):
         self.embedding = nn.Linear(n_features, embedding_dim)
         self.gru = nn.GRU(n_nodes, rnn_dim)
         self.fc1 = nn.Linear(self.rnn_dim, n_nodes)
-        self.sinkhorn = Sinkhorn(n_nodes, sinkhorn_iters, sinkhorn_tau)
+        self.sinkhorn = Sinkhorn(sinkhorn_iters, sinkhorn_tau)
         self.round = linear_assignment
         init_hx = torch.zeros(1, self.rnn_dim)
         if cuda:
             init_hx = init_hx.cuda()
         self.init_hx = Variable(init_hx, requires_grad=False)
         if num_workers > 0:
-            self.pool = Pool(num_workers) 
+            self.pool = Pool(num_workers)
 
     def cuda_after_load(self):
         self.init_hx = self.init_hx.cuda()
@@ -105,8 +170,10 @@ class SPGMatchingActor(nn.Module):
         """
         batch_size= x.size()[0]
         # split x into G1 and G2
+        # g1,g2 are [batch_size, n_nodes, num_features]
         g1 = x[:,0:self.n_nodes,:]
         g2 = x[:,self.n_nodes:2*self.n_nodes,:]
+
         g1 = F.leaky_relu(self.embedding(g1))
         g2 = F.leaky_relu(self.embedding(g2))
         # take outer product, result is [batch_size, N, N]
@@ -189,6 +256,45 @@ class SPGSequentialCritic(nn.Module):
         out = self.fc2(torch.transpose(out, 1, 2))
         # out is [batch_size, 1, 1]
         return out
+
+class SPGMatchingCriticV2(nn.Module):
+    def __init__(self, n_features, n_nodes, embedding_dim, rnn_dim, cuda):
+        super(SPGMatchingCritic, self).__init__()
+        self.use_cuda = cuda
+        self.rnn_dim = rnn_dim
+        self.gru = nn.GRU(n_features, rnn_dim)
+        self.combine = nn.Linear(rnn_dim, rnn_dim)
+        self.bn = nn.BatchNorm1d(rnn_dim)
+        self.fc = nn.Linear(self.rnn_dim, 1)
+        init_hx = torch.zeros(1, self.rnn_dim)
+        if cuda:
+            init_hx = init_hx.cuda()
+        self.init_hx = Variable(init_hx, requires_grad=False)
+    
+    def cuda_after_load(self):
+        self.init_hx = self.init_hx.cuda()
+
+    def forward(self, x, p):
+        """
+        x is [batch_size, 2 * n_nodes, n_features]
+        p is [batch_size, n_nodes, n_nodes]
+        """
+        # split x into G1 and G2
+        # g1,g2 are [batch_size, n_nodes, n_features]
+        g1 = x[:,0:n_nodes,:]
+        g2 = x[:,n_nodes:2*n_nodes,:]
+        # apply permutation to g2. Output is [batch_size, n_nodes, n_features]
+        g2 = torch.bmm(p, g2)
+        g1 = torch.transpose(g1, 0, 1)
+        g2 = torch.transpose(g2, 0, 1)
+        init_hx = self.init_hx.unsqueeze(1).repeat(1, batch_size, 1)
+        # h is [batch_size, rnn_dim]
+        _, h_n1 = self.gru(g1, init_hx)
+        _, h_n2 = self.gru(g2, init_hx)
+        h = h_n1 + h_n2
+        h = self.bn(F.relu(self.combine(h)))
+        q = self.fc(h)
+        return q
 
 class SPGMatchingCritic(nn.Module):
     def __init__(self, n_features, n_nodes, embedding_dim, rnn_dim, cuda):

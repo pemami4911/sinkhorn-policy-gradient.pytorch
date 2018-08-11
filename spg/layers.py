@@ -14,9 +14,8 @@ class Sinkhorn(Module):
     If L is too large or tau is too small, gradients will disappear 
     and cause the network to NaN out!
     """    
-    def __init__(self, n_nodes, sinkhorn_iters=5, tau=0.01):
+    def __init__(self, sinkhorn_iters=5, tau=0.01):
         super(Sinkhorn, self).__init__()
-        self.n_nodes = n_nodes
         self.tau = tau
         self.sinkhorn_iters = sinkhorn_iters
 

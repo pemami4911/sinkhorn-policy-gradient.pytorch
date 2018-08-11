@@ -23,8 +23,8 @@ from torch.optim import lr_scheduler
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from tensorboard_logger import configure, log_value, Logger
-from spg.models import SPGSequentialActor, SPGMatchingActor
-from spg.models import SPGSequentialCritic, SPGMatchingCritic
+from spg.models import SPGSequentialActor, SPGMatchingActor, SPGMatchingActorV2
+from spg.models import SPGSequentialCritic, SPGMatchingCritic, SPGMatchingCriticV2
 from spg.memory import Memory as ReplayBuffer
 import spg.util as util
 
@@ -131,10 +131,10 @@ def evaluate_model(args, count):
             critic = SPGSequentialCritic(args['n_features'], args['n_nodes'], args['embedding_dim'],
                     args['rnn_dim'], args['bidirectional'],  args['use_cuda'])
         elif args['arch'] == 'matching':
-            actor = SPGMatchingActor(args['n_features'], args['n_nodes'], args['embedding_dim'],
+            actor = SPGMatchingActorV2(args['n_features'], args['n_nodes'], args['embedding_dim'],
                 args['rnn_dim'], args['sinkhorn_iters'],  args['sinkhorn_tau'], 
                 args['actor_workers'], args['use_cuda'])
-            critic = SPGMatchingCritic(args['n_features'], args['n_nodes'], args['embedding_dim'],
+            critic = SPGMatchingCriticV2(args['n_features'], args['n_nodes'], args['embedding_dim'],
                 args['rnn_dim'], args['use_cuda'])
     args['save_dir'] = os.path.join(args['base_dir'], 'results', 'models', args['COP'], 'spg', args['arch'], args['_id'])    
     try:
