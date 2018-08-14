@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 import numpy as np
 import math
-from spg.layers import Sinkhorn
+from spg.layers import Sinkhorn, DeterministicAnnealing
 from spg.util import parallel_matching
 from sklearn.utils.linear_assignment_ import linear_assignment
 from pathos.multiprocessing import ProcessingPool as Pool
@@ -71,20 +71,23 @@ class SPGSequentialActor(nn.Module):
             perms = torch.stack(perms)
             if self.use_cuda:
                 perms = perms.cuda()
-            #dist = torch.sum(torch.sum(psi * perms, dim=1), dim=1) / self.n_nodes
             return psi, perms
         else:
             return psi, None
 
 class SPGMatchingActorV2(nn.Module):
-    def __init__(self, n_features, n_nodes, embedding_dim, rnn_dim,
-            sinkhorn_iters=5, sinkhorn_tau=1., num_workers=4, cuda=True):
-        super(SPGMatchingActor, self).__init__()
+    def __init__(self, n_features, max_n_nodes, embedding_dim, rnn_dim,
+            annealing_iters=4, sinkhorn_iters=5, sinkhorn_tau=1., tau_decay=0.8, 
+            num_workers=4, cuda=True):
+        super(SPGMatchingActorV2, self).__init__()
         self.use_cuda = cuda
+        self.max_n_nodes = max_n_nodes
         self.rnn_dim = rnn_dim
         self.num_workers = num_workers
-        self.gru = nn.GRU(n_features, rnn_dim)
-        self.sinkhorn = Sinkhorn(sinkhorn_iters, sinkhorn_tau)
+        self.embedding = nn.Linear(n_features, embedding_dim)
+        self.gru = nn.GRU(max_n_nodes, rnn_dim)
+        self.fc1 = nn.Linear(self.rnn_dim, max_n_nodes)
+        self.anneal = DeterministicAnnealing(annealing_iters, sinkhorn_iters, sinkhorn_tau, tau_decay)
         self.round = linear_assignment
         init_hx = torch.zeros(1, self.rnn_dim)
         if cuda:
@@ -98,25 +101,32 @@ class SPGMatchingActorV2(nn.Module):
     
     def forward(self, x, do_round=True):
         """
-        x is [batch_size, 2 * n_nodes, num_features]
+        x is [batch_size, 2 * n_nodes, n_features]
         """
-        batch_size, n_nodes, n_features= x.size()
-        n_nodes /= 2
+        batch_size, n_nodes, n_features = x.size()
+        n_nodes = int(n_nodes / 2)
         # split x into G1 and G2
         # g1,g2 are [batch_size, n_nodes, num_features]
         g1 = x[:,0:n_nodes,:]
         g2 = x[:,n_nodes:2*n_nodes,:]
-        g1 = torch.transpose(g1, 0, 1)
-        g2 = torch.transpose(g2, 0, 1)
+        g1 = F.leaky_relu(self.embedding(g1))
+        g2 = F.leaky_relu(self.embedding(g2))
+        # take outer product, result is [batch_size, N, N]
+        x = torch.bmm(g2, torch.transpose(g1, 2, 1))
+        # Pad to be [batch_size, n_nodes, self.max_n_nodes]
+        x = x.unsqueeze(1)
+        x = F.pad(x, (0, self.max_n_nodes - n_nodes, 0, 0)).squeeze(1)
+        x = torch.transpose(x, 0, 1)
         init_hx = self.init_hx.unsqueeze(1).repeat(1, batch_size, 1)
+        h, _ = self.gru(x, init_hx)
         # h is [n_nodes, batch_size, rnn_dim]
-        h1, _ = self.gru(g1, init_hx)
-        h2, _ = self.gru(g2, init_hx)
-        h1 = torch.transpose(h1, 0, 1)
-        h2 = torch.transpose(h2, 0, 1)
-        # take outer product, result is [batch_size, n_nodes, n_nodes]
-        x = torch.bmm(h2, torch.transpose(h1, 2, 1))
-        psi = self.sinkhorn(x)
+        h = torch.transpose(h, 0, 1)
+        # result M is [batch_size, n_nodes, max_n_nodes]
+        M = self.fc1(h)
+        # extract original dims by "selection"
+        M = M[:, 0:n_nodes, 0:n_nodes]
+        #psi = self.sinkhorn(M)
+        psi = self.anneal(M)
         if do_round:
             batch = psi.data.cpu().numpy()
             if np.any(np.isnan(batch)):
@@ -136,7 +146,6 @@ class SPGMatchingActorV2(nn.Module):
             perms.pin_memory()
             if self.use_cuda:
                 perms = perms.cuda(async=True)
-            #dist = torch.sum(torch.sum(psi * perms, dim=1), dim=1) / self.n_nodes
             return psi, perms
         else:
             return psi, None
@@ -205,7 +214,6 @@ class SPGMatchingActor(nn.Module):
             perms.pin_memory()
             if self.use_cuda:
                 perms = perms.cuda(async=True)
-            #dist = torch.sum(torch.sum(psi * perms, dim=1), dim=1) / self.n_nodes
             return psi, perms
         else:
             return psi, None
@@ -258,43 +266,84 @@ class SPGSequentialCritic(nn.Module):
         return out
 
 class SPGMatchingCriticV2(nn.Module):
-    def __init__(self, n_features, n_nodes, embedding_dim, rnn_dim, cuda):
-        super(SPGMatchingCritic, self).__init__()
+    def __init__(self, n_features, max_n_nodes, embedding_dim, rnn_dim, cuda):
+        super(SPGMatchingCriticV2, self).__init__()
         self.use_cuda = cuda
+        self.max_n_nodes = max_n_nodes
         self.rnn_dim = rnn_dim
-        self.gru = nn.GRU(n_features, rnn_dim)
-        self.combine = nn.Linear(rnn_dim, rnn_dim)
-        self.bn = nn.BatchNorm1d(rnn_dim)
-        self.fc = nn.Linear(self.rnn_dim, 1)
+        self.embedding = nn.Linear(n_features, embedding_dim)
+        self.embed_action = nn.Linear(max_n_nodes, embedding_dim)
+        self.embedding_bn = nn.BatchNorm1d(max_n_nodes)
+        self.gru = nn.GRU(max_n_nodes, rnn_dim)
+        self.combine = nn.Linear(embedding_dim, max_n_nodes)
+        self.bn1 = nn.BatchNorm1d(max_n_nodes)
+        self.bn2 = nn.BatchNorm1d(max_n_nodes)
+        self.fc1 = nn.Linear(self.rnn_dim, embedding_dim)
+        self.fc2 = nn.Linear(max_n_nodes, 1)
+        self.fc3 = nn.Linear(max_n_nodes, 1)
+        self.byte_mask = Variable(torch.zeros(1, max_n_nodes, max_n_nodes).byte(),
+                requires_grad=False)
         init_hx = torch.zeros(1, self.rnn_dim)
         if cuda:
             init_hx = init_hx.cuda()
+            self.byte_mask = self.byte_mask.cuda()
         self.init_hx = Variable(init_hx, requires_grad=False)
     
     def cuda_after_load(self):
         self.init_hx = self.init_hx.cuda()
+        self.byte_mask = self.byte_mask.cuda()
 
     def forward(self, x, p):
         """
-        x is [batch_size, 2 * n_nodes, n_features]
+        x is [batch_size, 2 * n_nodes, num_features]
         p is [batch_size, n_nodes, n_nodes]
         """
+        batch_size, n_nodes, n_features = x.size()
+        n_nodes = int(n_nodes / 2)
         # split x into G1 and G2
-        # g1,g2 are [batch_size, n_nodes, n_features]
         g1 = x[:,0:n_nodes,:]
-        g2 = x[:,n_nodes:2*n_nodes,:]
-        # apply permutation to g2. Output is [batch_size, n_nodes, n_features]
-        g2 = torch.bmm(p, g2)
-        g1 = torch.transpose(g1, 0, 1)
-        g2 = torch.transpose(g2, 0, 1)
+        g2 = x[:,n_nodes:2 * n_nodes,:]
+        g1 = F.leaky_relu(self.embedding(g1))
+        g2 = F.leaky_relu(self.embedding(g2))
+        # take outer product, result is [batch_size, N, N]
+        x = torch.bmm(g2, torch.transpose(g1, 2, 1))
+        x = x.unsqueeze(1)
+        x = F.pad(x, (0, self.max_n_nodes - n_nodes, 0, 0))
+        x = x.squeeze(1)
+        # [batch_size, n_nodes, self.max_n_nodes]
+        x = torch.transpose(x, 0, 1)
         init_hx = self.init_hx.unsqueeze(1).repeat(1, batch_size, 1)
-        # h is [batch_size, rnn_dim]
-        _, h_n1 = self.gru(g1, init_hx)
-        _, h_n2 = self.gru(g2, init_hx)
-        h = h_n1 + h_n2
-        h = self.bn(F.relu(self.combine(h)))
-        q = self.fc(h)
-        return q
+        h, hidden_state = self.gru(x, init_hx)
+        # h is [n_nodes, batch_size, rnn_dim]
+        x = torch.transpose(h, 0, 1)
+        # result is [batch_size, n_nodes, embedding_dim]
+        # pad with zeros for BN
+        x = x.unsqueeze(1)
+        x = F.pad(x, (0, 0, 0, self.max_n_nodes - n_nodes)).squeeze(1)
+        x = F.leaky_relu(self.bn1(self.fc1(x)))
+        #  pad the permutation to be [batch_size, max_n_nodes, max_n_nodes]
+        #  [P 0]
+        #  [0 0]
+        p = p.unsqueeze(1)
+        p = F.pad(p, (0, self.max_n_nodes - n_nodes, 0, self.max_n_nodes - n_nodes)).squeeze(1)
+        p = F.leaky_relu(self.embedding_bn(self.embed_action(p)))
+        # [batch_size, n_nodes, max_n_nodes]
+        x = F.leaky_relu(self.bn2(self.combine(x + p)))
+        if n_nodes < self.max_n_nodes:
+            # mask out activations for x
+            self.byte_mask[:,n_nodes:self.max_n_nodes-1,n_nodes:self.max_n_nodes-1] = 1
+            # repeat across 0 and 1 dims
+            byte_mask = self.byte_mask.repeat(batch_size, 1, 1)
+            x[byte_mask.detach()] = 0.
+            out = torch.transpose(self.fc2(x), 1, 2)
+            # out is [batch_size, 1, max_n_nodes]
+            # mask out the extra dims
+            out[byte_mask[:,0,:].detach()] = 0.
+        else:
+            out = torch.transpose(self.fc2(x), 1, 2)
+        out = self.fc3(out)
+        # out is [batch_size, 1, 1]
+        return out
 
 class SPGMatchingCritic(nn.Module):
     def __init__(self, n_features, n_nodes, embedding_dim, rnn_dim, cuda):

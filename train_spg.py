@@ -27,7 +27,6 @@ from spg.models import SPGSequentialActor, SPGMatchingActor, SPGMatchingActorV2
 from spg.models import SPGSequentialCritic, SPGMatchingCritic, SPGMatchingCriticV2
 from spg.memory import Memory as ReplayBuffer
 import spg.util as util
-
 # tasks
 from envs import dataset
 
@@ -42,9 +41,12 @@ parser.add_argument('--test_size', type=int, default=10000)
 # Model cfg options here
 parser.add_argument('--n_features', type=int, default=2)
 parser.add_argument('--n_nodes', type=int, default=10)
+parser.add_argument('--max_n_nodes', type=int, default=50)
 parser.add_argument('--arch', type=str, default='rnn')
 parser.add_argument('--sinkhorn_iters', type=int, default=10)
 parser.add_argument('--sinkhorn_tau', type=float, default=0.05)
+parser.add_argument('--annealing_iters', type=int, default=4)
+parser.add_argument('--tau_decay', type=float, default=0.8)
 parser.add_argument('--actor_lr', type=float, default=3e-4)
 parser.add_argument('--critic_lr', type=float, default=3e-4)
 parser.add_argument('--actor_lr_decay_rate', type=float, default=0.95)
@@ -77,22 +79,20 @@ parser.add_argument('--base_dir', type=str, default='/media/pemami/DATA/sinkhorn
 parser.add_argument('--epoch_start', type=int, default=0, help='Restart at epoch #')
 parser.add_argument('--save_model', type=util.str2bool, default=False, help='Save after epoch')
 parser.add_argument('--save_stats', type=util.str2bool, default=True)
-parser.add_argument('--actor_load_path', type=str, default='')
-parser.add_argument('--critic_load_path', type=str, default='')
+parser.add_argument('--load_actor', action='append', type=str)
+parser.add_argument('--load_critic', action='append', type=str)
 parser.add_argument('--disable_tensorboard', type=util.str2bool, default=True)
 parser.add_argument('--disable_progress_bar', type=util.str2bool, default=False)
 parser.add_argument('--_id', type=str, default='123456789', help='FGLab experiment ID')
 parser.add_argument('--num_workers', type=int, default=0)
 parser.add_argument('--make_only', type=int, default=3)
 
-Experience = namedtuple('Experience', ['state', 'action', 'reward'])
-
-DEBUG = False
-
 
 #########################################
 ##          Training funcs             ##
 ######################################### 
+Experience = namedtuple('Experience', ['state', 'action', 'reward'])
+DEBUG = False
 
 def evaluate_model(args, count):
     # Pretty print the run args
@@ -107,54 +107,51 @@ def evaluate_model(args, count):
     args['COP'] = task[0]  # the combinatorial optimization problem
     
     # Load the model parameters from a saved state
-    if args['actor_load_path'] != '' and args['critic_load_path'] != '':
-        print('  [*] Loading models from {}'.format(args['critic_load_path']))
+    if args['load_actor'] and args['load_critic']:
+        print('  [*] Loading models from {}'.format(args['load_actor']))
         actor = torch.load(
-            os.path.join(os.getcwd(),
-                args['actor_load_path']), map_location=lambda storage, loc: storage)
+            os.path.join(args['base_dir'],
+                args['load_actor']), map_location=lambda storage, loc: storage)
         critic = torch.load(
-            os.path.join(os.getcwd(),
-                args['critic_load_path']), map_location=lambda storage, loc: storage)
+            os.path.join(args['base_dir'],
+                args['load_critic']), map_location=lambda storage, loc: storage)
         if args['use_cuda']:
             actor.cuda_after_load()
             critic.cuda_after_load()
 
     else:
         # initialize RL model
-        if args['arch'] == 'fc':
-            print("Architecture not supported")
-            exit(1)
-        elif args['arch'] == 'sequential':
+        if args['arch'] == 'sequential':
             actor = SPGSequentialActor(args['n_features'], args['n_nodes'], args['embedding_dim'],
                     args['rnn_dim'], args['bidirectional'], args['sinkhorn_iters'],
                     args['sinkhorn_tau'], args['actor_workers'], args['use_cuda'])
             critic = SPGSequentialCritic(args['n_features'], args['n_nodes'], args['embedding_dim'],
                     args['rnn_dim'], args['bidirectional'],  args['use_cuda'])
         elif args['arch'] == 'matching':
-            actor = SPGMatchingActorV2(args['n_features'], args['n_nodes'], args['embedding_dim'],
-                args['rnn_dim'], args['sinkhorn_iters'],  args['sinkhorn_tau'], 
-                args['actor_workers'], args['use_cuda'])
-            critic = SPGMatchingCriticV2(args['n_features'], args['n_nodes'], args['embedding_dim'],
+            actor = SPGMatchingActorV2(args['n_features'], args['max_n_nodes'], args['embedding_dim'],
+                args['rnn_dim'], args['annealing_iters'], args['sinkhorn_iters'],  args['sinkhorn_tau'], 
+                args['tau_decay'], args['actor_workers'], args['use_cuda'])
+            critic = SPGMatchingCriticV2(args['n_features'], args['max_n_nodes'], args['embedding_dim'],
                 args['rnn_dim'], args['use_cuda'])
     args['save_dir'] = os.path.join(args['base_dir'], 'results', 'models', args['COP'], 'spg', args['arch'], args['_id'])    
     try:
         os.makedirs(args['save_dir'])
     except:
         pass
-    
     if args['use_cuda']:
         actor = actor.cuda()
         critic = critic.cuda()
+
     #Optimizers
     actor_optim = optim.Adam(actor.parameters(), lr=args['actor_lr'])
     critic_optim = optim.Adam(critic.parameters(), lr=args['critic_lr'])
     critic_loss = torch.nn.MSELoss()
     critic_aux_loss = torch.nn.MSELoss()
-
     if args['use_cuda']:
         critic_loss = critic_loss.cuda()
         critic_aux_loss = critic_aux_loss.cuda()
-
+    
+    # LR schedules
     actor_scheduler = lr_scheduler.MultiStepLR(actor_optim,
         range(args['actor_lr_decay_step'], args['actor_lr_decay_step'] * 1000,
             args['actor_lr_decay_step']), gamma=args['actor_lr_decay_rate'])
@@ -167,16 +164,19 @@ def evaluate_model(args, count):
     print("# of trainable actor parameters: {}".format(sum([np.prod(p.size()) for p in model_parameters])))
     model_parameters = filter(lambda p: p.requires_grad, critic.parameters())
     print("# of trainable critic parameters: {}".format(sum([np.prod(p.size()) for p in model_parameters])))
+    
     # Instantiate replay buffer
     observation_shape = [args['n_nodes'], args['n_features']]
     if args['COP'] == 'mwm2D': 
         observation_shape[0] *= 2
     replay_buffer = ReplayBuffer(args['buffer_size'], action_shape=[args['n_nodes'], args['n_nodes']], 
             observation_shape=observation_shape, use_cuda=args['replay_buffer_gpu'])
+    
     # Get dataloaders for train and test datasets
     args, env, training_dataloader, test_dataloader = dataset.build(args, args['epoch_start'])
     if args['COP'] == 'mwm2D':
         mwm2D_opt = test_dataloader.dataset.get_average_optimal_weight()
+    
     # Open files for writing results
     if args['save_stats']:
         fglab_results_dir = os.path.join(args['base_dir'], 'results', 'fglab', args['model'], args['COP'], args['_id'])
@@ -262,6 +262,7 @@ def evaluate_model(args, count):
 
     i = 0
     for i in range(epoch, epoch + args['n_epochs']):
+        # We want to do the first eval on the untrained agent
         eval_step = eval(eval_step)
         if args['save_model']:
             print(' [*] saving actor and critic...')
@@ -276,6 +277,7 @@ def evaluate_model(args, count):
                 obs = obs.cuda(async=True)
             psi, action = actor(obs)
             action = Variable(action, requires_grad=False)
+            # Compute "Birkhoff vertex distance"
             dist = torch.sum(torch.sum(psi * action, dim=1), dim=1) / args['n_nodes']
             if action is None: # Nan'd out
                 if args['save_stats']:   
