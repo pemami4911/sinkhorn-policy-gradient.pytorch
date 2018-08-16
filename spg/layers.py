@@ -4,7 +4,7 @@ from torch.nn.modules.module import Module
 from torch.autograd import Variable
 import torch.nn.functional as F
 import numpy as np
-from spg.util import logsumexp
+from spg.spg_utils import logsumexp
 
 class Sinkhorn(Module):
     """
@@ -65,11 +65,12 @@ class DeterministicAnnealing(Module):
         tau = self.tau
         Q = x
         for i in range(self.annealing_iters):
-            Q = self.sinkhorn(Q, tau)
+            Q = self.sinkhorn(Q, tau=tau)
             if i < self.annealing_iters-1:
                 # decay tau
                 tau *= self.tau_decay
                 # "Skip-connection" + "warm-up" for next sinkhorn
-                Q = Q + 0.01 * x
+                #Q = Q + 0.01 * x
+                #Q = torch.matmul(Q, x)
         return Q
 

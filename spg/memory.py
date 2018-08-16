@@ -2,7 +2,6 @@
 # https://github.com/openai/baselines/blob/master/baselines/ddpg/memory.py
 import numpy as np
 import torch
-import pdb
 
 class RingBuffer:
     def __init__(self, maxlen, shape, use_cuda, dtype='torch.FloatTensor'):
