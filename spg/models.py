@@ -8,6 +8,7 @@ from spg.layers import Sinkhorn, DeterministicAnnealing
 import spg.spg_utils as spg_utils
 from sklearn.utils.linear_assignment_ import linear_assignment
 from pathos.multiprocessing import ProcessingPool as Pool
+import time
 
 class SPGSequentialActor(nn.Module):
     """
@@ -94,8 +95,6 @@ class SPGMatchingActorV2(nn.Module):
         self.round = linear_assignment
         self._init_hx = Variable(torch.zeros(1, self.rnn_dim),
                 requires_grad=False)
-        if num_workers > 0:
-            self.pool = Pool(num_workers)
         self._input = Variable(torch.zeros(bsz, 2 * n_nodes, n_features),
                 requires_grad=False)
         self._input.data.pin_memory()
@@ -106,24 +105,44 @@ class SPGMatchingActorV2(nn.Module):
             self._init_hx = self._init_hx.cuda()
             self._input = self._input.cuda(async=True)
             self._perms = self._perms.cuda(async=True)
+        self.total_round_time = 0.
+        self.count = 0.
+        if num_workers > 0:
+            self.pool = Pool(num_workers)
+
+    def reinit(self):
+        self._init_hx = Variable(torch.zeros(1, self.rnn_dim),
+                requires_grad=False)
+        self._input = Variable(torch.zeros(self.batch_size, 2 * self.n_nodes, self.n_features),
+                requires_grad=False)
+        self._X = Variable(torch.zeros(self.batch_size, self.n_nodes, self.n_nodes))
+        self._perms = Variable(torch.zeros(self.batch_size, self.n_nodes, self.n_nodes))
 
     def cuda_after_load(self):
         self.init_hx = self.init_hx.cuda()
         self._input = self._input.cuda(async=True)
         self._perms = self._perms.cuda(async=True)
 
-    def permute_input(self, f, hard_perm):
-        return f(self._input, hard_perm)
+    #def permute_input(self, f, hard_perm):
+    #    return f(self._input, hard_perm)
+
+    def permute_input(self, f, x, hard_perm):
+        return f(x.cuda(), hard_perm)
 
     def forward(self, x, do_round=True):
         """
         x is [batch_size, 2 * n_nodes, n_features]
         """
-        self._input.data.copy_(x)
+        #self._input.data.copy_(x)
+        if self.use_cuda:
+            x = x.cuda()
         # split x into G1 and G2
         # g1,g2 are [batch_size, n_nodes, num_features]
-        g1 = self._input[:,0 : self.n_nodes,:]
-        g2 = self._input[:,self.n_nodes : 2*self.n_nodes,:]
+        #g1 = self._input[:,0 : self.n_nodes,:]
+        #g2 = self._input[:,self.n_nodes : 2*self.n_nodes,:]
+        g1 = x[:,0 : self.n_nodes,:]
+        g2 = x[:,self.n_nodes : 2*self.n_nodes,:]
+        
         g1 = F.leaky_relu(self.embedding(g1))
         g2 = F.leaky_relu(self.embedding(g2))
         # take outer product, result is [batch_size, N, N]
@@ -132,7 +151,7 @@ class SPGMatchingActorV2(nn.Module):
         x = x.unsqueeze(1)
         x = F.pad(x, (0, self.max_n_nodes - self.n_nodes, 0, 0)).squeeze(1)
         x = torch.transpose(x, 0, 1)
-        init_hx = self._init_hx.unsqueeze(1).repeat(1, self.batch_size, 1)
+        init_hx = self.init_hx.unsqueeze(1).repeat(1, self.batch_size, 1)
         x, _ = self.gru(x, init_hx)
         # x is [n_nodes, batch_size, rnn_dim]
         x = torch.transpose(x, 0, 1)
@@ -146,8 +165,10 @@ class SPGMatchingActorV2(nn.Module):
         C = psi.sum(dim=1).mean(dim=0)
         R = psi.sum(dim=2).mean(dim=0)
         if do_round:
-            self._X.data.copy_(psi.data.cpu())
-            batch = self._X.numpy()
+            start = time.time()
+            #self._X.data.copy_(psi.data.cpu())
+            #batch = self._X.numpy()
+            batch = psi.data.cpu().numpy()
             if np.any(np.isnan(batch)):
                 return None, None, None, None
             if self.num_workers > 0:
@@ -161,8 +182,15 @@ class SPGMatchingActorV2(nn.Module):
                     matching = self.round(-batch[i])
                     perm[matching[:,0], matching[:,1]] = 1
                     perms.append(perm)
-            self._perms.data.copy_(torch.stack(perms).contiguous())
-            return psi, self._perms, C, R
+            #self._perms.data.copy_(torch.stack(perms).contiguous())
+            perms = torch.stack(perms).contiguous()
+            time_diff = time.time() - start
+            if self.use_cuda:
+                perms = perms.cuda()
+            #self.count += 1
+            #self.total_round_time += time_diff
+            #return psi, self._perms, C, R
+            return psi, perms, C, R
         else:
             return psi, None, C, R
 

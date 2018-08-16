@@ -9,7 +9,6 @@ import time
 import json
 import h5py 
 import copy
-import pickle
 # DEBUG
 import pdb
 
@@ -84,7 +83,7 @@ parser.add_argument('--load_critic', action='append', type=str)
 parser.add_argument('--disable_tensorboard', type=spg_utils.str2bool, default=True)
 parser.add_argument('--disable_progress_bar', type=spg_utils.str2bool, default=False)
 parser.add_argument('--_id', type=str, default='123456789', help='FGLab experiment ID')
-parser.add_argument('--num_workers', type=int, default=4)
+parser.add_argument('--num_workers', type=int, default=0)
 parser.add_argument('--make_only', type=int, default=3)
 
 
@@ -98,7 +97,7 @@ def train_model(args):
     if not args['disable_tensorboard']:
         # append last 6 digits of experiment id to run name
         args['run_name'] = args['_id'][-6:] + '-' + args['run_name']
-        configure(os.path.join(args['base_dir'], 'results', 'logs', args['task'], args['run_name']), flush_secs=2)
+        configure(os.path.join(args['base_dir'], 'results', 'logs', args['task'], 'train', args['run_name']), flush_secs=2)
     
     task = args['task'].split('_')
     args['COP'] = task[0]  # the combinatorial optimization problem
@@ -115,7 +114,8 @@ def train_model(args):
         if args['use_cuda']:
             actor.cuda_after_load()
             critic.cuda_after_load()
-
+        actor.n_nodes = args['n_nodes']
+        critic.n_nodes = args['n_nodes']
     else:
         # initialize RL model
         if args['arch'] == 'sequential':
@@ -125,11 +125,11 @@ def train_model(args):
             critic = SPGSequentialCritic(args['n_features'], args['n_nodes'], args['embedding_dim'],
                     args['rnn_dim'], args['bidirectional'],  args['use_cuda'])
         elif args['arch'] == 'matching':
-            actor = SPGMatchingActorV2(args['batch_size'], args['n_features'], args['n_nodes'],
+            actor = SPGMatchingActorV2(args['parallel_envs'], args['n_features'], args['n_nodes'],
                     args['max_n_nodes'], args['embedding_dim'],
                     args['rnn_dim'], args['annealing_iters'], args['sinkhorn_iters'],  args['sinkhorn_tau'], 
                     args['tau_decay'], args['actor_workers'], args['use_cuda'])
-            critic = SPGMatchingCriticV2(args['batch_size'], args['n_features'], args['n_nodes'],
+            critic = SPGMatchingCriticV2(args['parallel_envs'], args['n_features'], args['n_nodes'],
                     args['max_n_nodes'], args['embedding_dim'], args['rnn_dim'], args['use_cuda'])
     args['save_dir'] = os.path.join(args['base_dir'], 'results', 'models', args['COP'], 'spg', args['arch'], args['_id'])    
     try:
@@ -204,7 +204,7 @@ def train_model(args):
     eval_means = []
     eval_stddevs = []
     
-    def eval(eval_step, final=False):
+    def eval(eval_step):
         with torch.no_grad():
             # Eval 
             eval_R = []
@@ -302,9 +302,9 @@ def train_model(args):
                 birkhoff_dist.append(dist.data.cpu().numpy())
             if train_step % args['log_step'] == 0 and not DEBUG:
                 print('epoch: {}, step: {}, avg reward: {:.4f}, std dev: {:.4f}, min reward: {:.4f}, ' \
-                        'max reward: {:.4f}, epsilon: {:.4f}, bd: {:.4f}'.format(
+                        'max reward: {:.4f}, epsilon: {:.4f}, bd: {:.4f}, avg round time: {:.4f}'.format(
                     i+1, train_step, np.mean(running_avg_R), np.std(running_avg_R), np.min(running_avg_R),
-                        np.max(running_avg_R), epsilon, np.mean(running_avg_bd)))
+                        np.max(running_avg_R), epsilon, np.mean(running_avg_bd), actor.total_round_time / actor.count))
                 if args['COP'] == 'sort':
                     inn = []
                     out = []
