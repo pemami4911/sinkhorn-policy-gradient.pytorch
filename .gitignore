@@ -6,6 +6,8 @@ logs/
 .ipynb_checkpoints/
 sigopt/
 deep_assign/
+spg/build/
 
 # Files
 *.pyc
+*.so

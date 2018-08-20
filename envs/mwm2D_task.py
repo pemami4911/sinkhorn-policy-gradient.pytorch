@@ -23,7 +23,7 @@ def reward(matching, use_cuda):
     for i in range(M):
         dists = torch.norm(matching[:, i + M, :] - matching[:, i, :], 2, dim=1)
         matching_weight += dists.float().unsqueeze(1)
-    return matching_weight 
+    return matching_weight
 
 def reward_nco(matching, use_cuda):
     """

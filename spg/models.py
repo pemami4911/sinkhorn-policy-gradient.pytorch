@@ -1,14 +1,13 @@
 import torch
+import time
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 import numpy as np
 import math
+from pathos.multiprocessing import ProcessingPool as Pool
 from spg.layers import Sinkhorn, DeterministicAnnealing
 import spg.spg_utils as spg_utils
-from sklearn.utils.linear_assignment_ import linear_assignment
-from pathos.multiprocessing import ProcessingPool as Pool
-import time
 
 class SPGSequentialActor(nn.Module):
     """
@@ -29,7 +28,6 @@ class SPGSequentialActor(nn.Module):
         scale = 2 if bidirectional else 1
         self.fc2 = nn.Linear(scale * self.rnn_dim, n_nodes)
         self.sinkhorn = Sinkhorn(sinkhorn_iters, sinkhorn_tau)
-        self.round = linear_assignment
         init_hx = torch.zeros(scale, self.rnn_dim)
         if cuda:
             init_hx = init_hx.cuda()
@@ -60,15 +58,10 @@ class SPGSequentialActor(nn.Module):
                 return None, None, None, None
             if self.num_workers > 0:
                 batches = np.split(batch, self.num_workers, 0)
-                perms = self.pool.map(spg_utils.parallel_matching, batches)
+                perms = self.pool.map(spg_utils.matching, batches)
                 perms = [p for pp in perms for p in pp]
             else:
-                perms = []
-                for i in range(batch_size):
-                    perm = torch.zeros(self.n_nodes, self.n_nodes)                   
-                    matching = self.round(-batch[i])
-                    perm[matching[:,0], matching[:,1]] = 1
-                    perms.append(perm)
+                perms = spg_utils.matching(batch)
             perms = torch.stack(perms)
             if self.use_cuda:
                 perms = perms.cuda()
@@ -92,57 +85,32 @@ class SPGMatchingActorV2(nn.Module):
         self.fc1 = nn.Linear(self.rnn_dim, max_n_nodes)
         self.anneal = DeterministicAnnealing(annealing_iters,
                 sinkhorn_iters, sinkhorn_tau, tau_decay)
-        self.round = linear_assignment
-        self._init_hx = Variable(torch.zeros(1, self.rnn_dim),
-                requires_grad=False)
-        self._input = Variable(torch.zeros(bsz, 2 * n_nodes, n_features),
-                requires_grad=False)
+        self._init_hx = Variable(torch.zeros(1, self.rnn_dim))
+        self._input = Variable(torch.zeros(bsz, 2 * n_nodes, n_features))
         self._input.data.pin_memory()
         self._X = Variable(torch.zeros(bsz, n_nodes, n_nodes))
         self._perms = Variable(torch.zeros(bsz, n_nodes, n_nodes))
         self._perms.data.pin_memory()
-        if cuda:
-            self._init_hx = self._init_hx.cuda()
-            self._input = self._input.cuda(async=True)
-            self._perms = self._perms.cuda(async=True)
         self.total_round_time = 0.
         self.count = 0.
         if num_workers > 0:
             self.pool = Pool(num_workers)
-
-    def reinit(self):
-        self._init_hx = Variable(torch.zeros(1, self.rnn_dim),
-                requires_grad=False)
-        self._input = Variable(torch.zeros(self.batch_size, 2 * self.n_nodes, self.n_features),
-                requires_grad=False)
-        self._X = Variable(torch.zeros(self.batch_size, self.n_nodes, self.n_nodes))
-        self._perms = Variable(torch.zeros(self.batch_size, self.n_nodes, self.n_nodes))
+        if cuda:
+            self._init_hx = self._init_hx.cuda()
+            self._input = self._input.cuda(async=True)
+            self._perms = self._perms.cuda(async=True)
 
     def cuda_after_load(self):
-        self.init_hx = self.init_hx.cuda()
+        self._init_hx = self._init_hx.cuda()
         self._input = self._input.cuda(async=True)
         self._perms = self._perms.cuda(async=True)
 
-    #def permute_input(self, f, hard_perm):
-    #    return f(self._input, hard_perm)
+    def permute_input(self, f, hard_perm):
+        return f(self._input, hard_perm)
 
-    def permute_input(self, f, x, hard_perm):
-        return f(x.cuda(), hard_perm)
-
-    def forward(self, x, do_round=True):
-        """
-        x is [batch_size, 2 * n_nodes, n_features]
-        """
-        #self._input.data.copy_(x)
-        if self.use_cuda:
-            x = x.cuda()
-        # split x into G1 and G2
-        # g1,g2 are [batch_size, n_nodes, num_features]
-        #g1 = self._input[:,0 : self.n_nodes,:]
-        #g2 = self._input[:,self.n_nodes : 2*self.n_nodes,:]
-        g1 = x[:,0 : self.n_nodes,:]
-        g2 = x[:,self.n_nodes : 2*self.n_nodes,:]
-        
+    def net(self):
+        g1 = self._input[:,0 : self.n_nodes,:]
+        g2 = self._input[:,self.n_nodes : 2*self.n_nodes,:]
         g1 = F.leaky_relu(self.embedding(g1))
         g2 = F.leaky_relu(self.embedding(g2))
         # take outer product, result is [batch_size, N, N]
@@ -151,7 +119,7 @@ class SPGMatchingActorV2(nn.Module):
         x = x.unsqueeze(1)
         x = F.pad(x, (0, self.max_n_nodes - self.n_nodes, 0, 0)).squeeze(1)
         x = torch.transpose(x, 0, 1)
-        init_hx = self.init_hx.unsqueeze(1).repeat(1, self.batch_size, 1)
+        init_hx = self._init_hx.unsqueeze(1).repeat(1, self.batch_size, 1)
         x, _ = self.gru(x, init_hx)
         # x is [n_nodes, batch_size, rnn_dim]
         x = torch.transpose(x, 0, 1)
@@ -159,42 +127,50 @@ class SPGMatchingActorV2(nn.Module):
         x = self.fc1(x)
         # extract original dims by "selection"
         x = x[:, 0:self.n_nodes, 0:self.n_nodes]
-        #psi = self.sinkhorn(M)
-        psi = self.anneal(x)
-        # compute marginals
-        C = psi.sum(dim=1).mean(dim=0)
-        R = psi.sum(dim=2).mean(dim=0)
-        if do_round:
+        return self.anneal(x)
+
+    def forward(self, x, forward_pass=True):
+        """
+        x is [batch_size, 2 * n_nodes, n_features]
+        """
+        self._input.data.copy_(x)
+        psi = self.net()
+        if forward_pass:
             start = time.time()
-            #self._X.data.copy_(psi.data.cpu())
-            #batch = self._X.numpy()
-            batch = psi.data.cpu().numpy()
+            self._X.data.copy_(psi.data.cpu())
+            batch = self._X.numpy()
             if np.any(np.isnan(batch)):
                 return None, None, None, None
             if self.num_workers > 0:
                 batches = np.split(batch, self.num_workers, 0)
-                perms = self.pool.map(spg_utils.parallel_matching, batches)
+                perms = self.pool.map(spg_utils.matching, batches)
                 perms = [p for pp in perms for p in pp]
             else:
-                perms = []
-                for i in range(batch_size):
-                    perm = torch.zeros(n_nodes, n_nodes)
-                    matching = self.round(-batch[i])
-                    perm[matching[:,0], matching[:,1]] = 1
-                    perms.append(perm)
-            #self._perms.data.copy_(torch.stack(perms).contiguous())
-            perms = torch.stack(perms).contiguous()
+                perms = spg_utils.matching(batch)
+            self._perms.data.copy_(torch.stack(perms).contiguous())
             time_diff = time.time() - start
-            if self.use_cuda:
-                perms = perms.cuda()
-            #self.count += 1
-            #self.total_round_time += time_diff
-            #return psi, self._perms, C, R
-            return psi, perms, C, R
-        else:
-            return psi, None, C, R
+            self.count += 1
+            self.total_round_time += time_diff
+            return psi, self._perms
+        else: # During the backward pass
+            """
+            # randomly sample a permutation
+            perm = torch.zeros(self.n_nodes, self.n_nodes)
+            p2 = torch.randperm(self.n_nodes, requires_grad=False).unsqueeze(1)
+            idxs = torch.cat([torch.arange(0,self.n_nodes).unsqueeze(1), p2], dim=1)
+            perm[idxs[:,0], idxs[:,1]] = 1
+            perm = perm.unsqueeze(0).repeat(self.batch_size, 1, 1)
+            if self.use_cuda: perm = perm.cuda()
+            self._input.data.copy_(self.permute_input(spg_utils.permute_bipartite, perm))
+            psi2 = self.net()
+            # apply perm_inv
+            psi2 = torch.matmul(psi2, torch.transpose(perm, 1, 2))
+            """
+            return psi, None
 
 class SPGMatchingActor(nn.Module):
+    from sklearn.utils.linear_assignment_ import linear_assignment
+
     def __init__(self, n_features, n_nodes, embedding_dim, rnn_dim,
             sinkhorn_iters=5, sinkhorn_tau=1., num_workers=4, cuda=True):
         super(SPGMatchingActor, self).__init__()
@@ -329,21 +305,17 @@ class SPGMatchingCriticV2(nn.Module):
         self.fc1 = nn.Linear(self.rnn_dim, embedding_dim)
         self.fc2 = nn.Linear(max_n_nodes, 1)
         self.fc3 = nn.Linear(max_n_nodes, 1)
-        self.byte_mask = Variable(torch.zeros(1, max_n_nodes, max_n_nodes).byte(),
-                requires_grad=False)
-        self._init_hx = Variable(torch.zeros(1, self.rnn_dim),
-                requires_grad=False)
-        self._input = Variable(torch.zeros(bsz, 2 * n_nodes, n_features),
-                requires_grad=False)
+        self.byte_mask = Variable(torch.zeros(1, max_n_nodes, max_n_nodes).byte())
+        self._init_hx = Variable(torch.zeros(1, self.rnn_dim))
+        self._input = Variable(torch.zeros(bsz, 2 * n_nodes, n_features))
         self._input.data.pin_memory()
-        self._perm = Variable(torch.zeros(bsz, n_nodes, n_nodes), 
-                requires_grad=False)
-        self._perm.data.pin_memory()
+        #self._perm = Variable(torch.zeros(bsz, n_nodes, n_nodes))
+        #self._perm.data.pin_memory()
         if cuda:
             self._init_hx = self._init_hx.cuda()
             self.byte_mask = self.byte_mask.cuda()
             self._input = self._input.cuda(async=True)
-            self._perm = self._perm.cuda(async=True)
+            #self._perm = self._perm.cuda(async=True)
 
     def cuda_after_load(self):
         self._init_hx = self._init_hx.cuda()
@@ -357,7 +329,7 @@ class SPGMatchingCriticV2(nn.Module):
         p is [batch_size, n_nodes, n_nodes]
         """
         self._input.data.copy_(x)
-        self._perm.data.copy_(p)
+        #self._perm.data.copy_(p)
         # split x into G1 and G2
         g1 = self._input[:,0 : self.n_nodes,:]
         g2 = self._input[:, self.n_nodes : 2 * self.n_nodes,:]
@@ -382,7 +354,7 @@ class SPGMatchingCriticV2(nn.Module):
         #  pad the permutation to be [batch_size, max_n_nodes, max_n_nodes]
         #  [P 0]
         #  [0 0]
-        p = self._perm.unsqueeze(1)
+        p = p.unsqueeze(1)
         p = F.pad(p, (0, self.max_n_nodes - self.n_nodes, 0,
             self.max_n_nodes - self.n_nodes)).squeeze(1)
         p = F.leaky_relu(self.embedding_bn(self.embed_action(p)))
