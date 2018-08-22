@@ -25,15 +25,14 @@ def reward_spg(solution, use_cuda):
     Returns:
         Tensor of shape [batch_size] containing rewards
     """
-    batch_size, N, _ = solution.data.shape
-    tour_len = torch.zeros(batch_size, 1)
+    batch_size, N, _ = solution.size()
+    tour_len = Variable(torch.zeros(batch_size, 1), requires_grad=False)
     if use_cuda:
         tour_len = tour_len.cuda()
     for i in range(N - 1):
-        tour_len += torch.norm(solution[:,i,:].data - solution[:,i+1,:].data, p=2, dim=1)
-    tour_len += torch.norm(solution[:,N-1,:].data - solution[:,0,:].data, p=2, dim=1)
-
-    return Variable(-tour_len, requires_grad=False)
+        tour_len = tour_len + torch.norm(solution[:,i+1,:] - solution[:,i,:], p=2, dim=1).unsqueeze(1)
+    tour_len = tour_len + torch.norm(solution[:,0,:].data - solution[:,N-1,:].data, p=2, dim=1).unsqueeze(1)
+    return -tour_len
 
 def reward_nco(sample_solution, use_cuda=False):
     """
@@ -219,11 +218,54 @@ def create_dataset(
         test_size,
         data_dir,
         tour_len,
-        epoch,
+        make='None'):
+    
+    train_dir = os.path.join(data_dir, 'train', 'N={}'.format(tour_len))
+    test_dir = os.path.join(data_dir, 'test', 'N={}'.format(tour_len))
+    if make == 'None':
+        return train_dir, test_dir
+    
+    if not os.path.isdir(train_dir):
+        os.makedirs(train_dir)
+    if not os.path.isdir(test_dir):
+        os.makedirs(test_dir)
+
+    def to_string(tensor):
+        """
+        Convert a a torch.LongTensor 
+        of size data_len to a string 
+        of integers separated by whitespace
+        and ending in a newline character
+        """
+        mat = ''
+        for ii in range(2):
+            for jj in range(tour_len - 1):
+                mat += '{} '.format(tensor[ii, jj])
+            mat += str(tensor[ii,-1].item()) + '\n'
+        return mat
+
+    if make == 'all' or make == 'train':
+        for i in trange(train_size):
+            x = torch.FloatTensor(2, tour_len).uniform_(0, 1)
+            with open(os.path.join(train_dir, '{}.txt'.format(i)), 'w') as f:
+                f.write(to_string(x))
+
+    if make == 'all' or make == 'test':
+        for i in trange(test_size):
+            x = torch.FloatTensor(2, tour_len).uniform_(0, 1)
+            with open(os.path.join(test_dir, '{}.txt'.format(i)), 'w') as f:
+                f.write(to_string(x))
+
+    return train_dir, test_dir
+
+def create_dataset_(
+        train_size,
+        test_size,
+        data_dir,
+        tour_len,
         reset=False,
-        random_seed=None):
-    if random_seed is not None:
-        torch.manual_seed(random_seed)
+        random_seed=None,
+        only=-1):
 
     train_task = 'tsp-size-{}-N-{}-train.txt'.format(train_size, tour_len)
     test_task = 'tsp-size-{}-N-{}-test.txt'.format(test_size, tour_len)
@@ -277,41 +319,23 @@ def create_dataset(
 #######################################
 class TSPDataset(Dataset):
     
-    def __init__(self, dataset_fname=None, use_downloaded_data=False):
-        super(TSPDataset, self).__init__()
-        
-        print(' [*] loading dataset into memory')
-
-        self.data_set = []
-        if use_downloaded_data:
-            with open(dataset_fname, 'r') as dset:
-                for l in tqdm(dset):
-                    inputs, outputs = l.split(' output ')
-                    sample = torch.zeros(1, )
-                    x = np.array(inputs.split(), dtype=np.float32).reshape([-1, 2]).T
-                    self.data_set.append(x)
-        else:
-            with open(dataset_fname, 'r') as dset:
-                lines = dset.readlines()
-                N = len(lines[0].split())
-                ctr = -1
-                sample = torch.zeros(N, 2)
-                for next_line in tqdm(lines):
-                    if ctr < 1:
-                        ctr += 1
-                    else:
-                        ctr = 0
-                        self.data_set.append(sample)
-                        sample = torch.zeros(N, 2)
-
-                    toks = next_line.split()
-                    for idx, tok in enumerate(toks):
-                        sample[idx, ctr] = float(tok)
-
-        self.size = len(self.data_set)
+    def __init__(self, data_dir, size):
+        super(TSPDataset, self).__init__()        
+        self.data_dir = data_dir
+        self.size = size
 
     def __len__(self):
         return self.size
 
     def __getitem__(self, idx):
-        return self.data_set[idx]
+        with open(os.path.join(self.data_dir, '{}.txt'.format(idx)), 'r') as dset:
+            lines = dset.readlines()
+            N = len(lines[0].split())
+            ctr = 0
+            sample = torch.zeros(N, 2)
+            for next_line in lines:
+                toks = next_line.split()
+                for idx, tok in enumerate(toks):
+                    sample[idx, ctr] = float(tok)
+                ctr += 1
+            return sample

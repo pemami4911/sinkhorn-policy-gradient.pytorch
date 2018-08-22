@@ -74,3 +74,25 @@ class DeterministicAnnealing(Module):
                 #Q = torch.matmul(Q, x)
         return Q
 
+class SetPooling(Module):
+    """
+    Permutation equivariant embedding of a set of max_n_objects
+
+    Computes
+    """
+    def __init__(self, feature_dim, out_dim):
+        super(SetPooling, self).__init__()
+        self.fc = torch.nn.Linear(feature_dim, out_dim)
+
+    def forward(self, x):
+        """
+        Args: 
+            x: [bsz, n, d]
+        """
+        # sum-pooling across dim 1
+        # result is [bsz, d]
+        sum_pool = x.mean(dim=1, keepdim=True)
+        x = F.leaky_relu(self.fc(x - sum_pool))
+        return x
+        
+

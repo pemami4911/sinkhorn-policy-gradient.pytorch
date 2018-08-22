@@ -86,7 +86,7 @@ parser.add_argument('--disable_tensorboard', type=spg_utils.str2bool, default=Tr
 parser.add_argument('--disable_progress_bar', type=spg_utils.str2bool, default=False)
 parser.add_argument('--_id', type=str, default='123456789', help='FGLab experiment ID')
 parser.add_argument('--num_workers', type=int, default=4)
-parser.add_argument('--make_only', type=int, default=3)
+parser.add_argument('--make_datasets', type=str, default='all')
 
 
 Experience = namedtuple('Experience', ['state', 'action', 'reward'])
@@ -121,11 +121,11 @@ def train_model(args):
     else:
         # initialize RL model
         if args['arch'] == 'sequential':
-            actor = SPGSequentialActor(args['n_features'], args['n_nodes'], args['embedding_dim'],
-                    args['rnn_dim'], args['bidirectional'], args['sinkhorn_iters'],
+            actor = SPGSequentialActor(args['parallel_envs'], args['n_features'], args['n_nodes'],
+                    args['max_n_nodes'], args['embedding_dim'], args['rnn_dim'], args['sinkhorn_iters'],
                     args['sinkhorn_tau'], args['actor_workers'], args['use_cuda'])
-            critic = SPGSequentialCritic(args['n_features'], args['n_nodes'], args['embedding_dim'],
-                    args['rnn_dim'], args['bidirectional'],  args['use_cuda'])
+            critic = SPGSequentialCritic(args['parallel_envs'], args['n_features'], args['n_nodes'],
+                    args['max_n_nodes'], args['embedding_dim'], args['rnn_dim'], args['use_cuda'])
         elif args['arch'] == 'matching':
             actor = SPGMatchingActorV2(args['parallel_envs'], args['n_features'], args['n_nodes'],
                     args['max_n_nodes'], args['embedding_dim'],
@@ -423,7 +423,6 @@ if __name__ == '__main__':
     
     args = vars(parser.parse_args())
     args['model'] = 'spg'
-    args['sl'] = False
     
     # Set random seeds
     torch.manual_seed(args['random_seed'])

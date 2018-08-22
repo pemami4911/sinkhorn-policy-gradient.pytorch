@@ -19,8 +19,7 @@ def build(args, epoch):
             args['data_dir'],
             epoch,
             low=args['sort_low'],
-            high=args['sort_high'],
-            random_seed=args['random_seed'])
+            high=args['sort_high'])
         training_dataset = sorting_task.SortingDataset(train_fname, use_graph=False)
         test_dataset = sorting_task.SortingDataset(test_fname, use_graph=False)
         if args['model'] == 'nco':
@@ -38,30 +37,25 @@ def build(args, epoch):
             args['data_dir'],
             N=int(N),
             maximal=False,
-            random_seed=args['random_seed'],
-            sl=args['sl'],
-            only=args['make_only'])
-        test_dataset = mwm2D_task.MWM2DDataset(test_dir, args['test_size'], has_labels=args['sl'], sl=args['sl'])           
-        training_dataset = mwm2D_task.MWM2DDataset(train_dir, args['train_size'], has_labels=args['sl'], sl=args['sl'])
+            make=args['make_datasets'])
+        test_dataset = mwm2D_task.MWM2DDataset(test_dir, args['test_size'])           
+        training_dataset = mwm2D_task.MWM2DDataset(train_dir, args['train_size'])
         #if args['val_size'] > 0:
-        #    val_dataset = mwm2D_task.MWM2DDataset(val_dir, args['val_size'], has_labels=args['sl'])
+        #    val_dataset = mwm2D_task.MWM2DDataset(val_dir, args['val_size'])
         if args['model'] == 'nco' or args['arch'] == 'pnac':
             env = mwm2D_task.reward_nco
         else:
             env = mwm2D_task.reward
     elif args['COP'] == 'tsp':
         tour_len = int(task[1])
-        train_fname, test_fname = tsp_task.create_dataset(
+        train_dir, test_dir = tsp_task.create_dataset(
             args['train_size'],
             args['test_size'],
             args['data_dir'],
             tour_len=tour_len,
-            epoch=epoch,
-            random_seed=args['random_seed'])
-        training_dataset = tsp_task.TSPDataset(train_fname)
-        #if not reset:
-        #    val_dataset = tsp_task.TSPDataset(val_fname)
-        test_dataset = tsp_task.TSPDataset(test_fname)
+            make=args['make_datasets'])
+        training_dataset = tsp_task.TSPDataset(train_dir, args['train_size'])
+        test_dataset = tsp_task.TSPDataset(test_dir, args['test_size'])
         if args['model'] == 'spg':
             env = tsp_task.reward_spg
         elif args['model'] == 'nco':
@@ -71,7 +65,7 @@ def build(args, epoch):
          batch_size=args['parallel_envs'], shuffle=True, drop_last=True, num_workers=args['num_workers'])
     #validation_dataloader = DataLoader(val_dataset,
     #     batch_size=args['parallel_envs'], shuffle=True, drop_last=True, num_workers=args['num_workers'])
-    #if args['COP'] == 'mwm2D' and args['sl']:
+    #if args['COP'] == 'mwm2D:
     test_dataloader = DataLoader(test_dataset,
          batch_size=args['parallel_envs'], shuffle=True, drop_last=True, num_workers=args['num_workers'])
     return args, env, training_dataloader, test_dataloader

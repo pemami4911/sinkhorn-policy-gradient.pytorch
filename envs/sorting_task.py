@@ -146,12 +146,8 @@ def create_dataset(
         epoch,
         low=1, 
         high=10,
-        train_only=False,
-        random_seed=None):    
+        train_only=False):    
     data_len = high - low + 1
-
-    if random_seed is not None:
-        torch.manual_seed(random_seed)
     
     train_task = 'epoch-{}-sorting-size-{}-low-{}-high-{}-train.txt'.format(epoch, train_size, low, high)
     test_task = 'sorting-size-{}-low-{}-high-{}-test.txt'.format(test_size, low, high)

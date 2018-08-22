@@ -39,22 +39,11 @@ def create_dataset(
         data_dir,
         N,
         maximal=True,
-        random_seed=None,
-        sl=False,
-        only=-1):    
-    # only == 0, only train
-    # only == 1, only val
-    # only == 2, only test
-    # only == -1, all
-    # only == 3, none
-
-    if random_seed is not None:
-        torch.manual_seed(int(random_seed))
-
+        make='None'):    
     train_dir = os.path.join(data_dir, 'train', 'N={}'.format(N))
     val_dir = os.path.join(data_dir, 'val', 'N={}'.format(N))
     test_dir = os.path.join(data_dir, 'test', 'N={}'.format(N))
-    if only == 3:
+    if make == 'None':
         return train_dir, val_dir, test_dir
     
     if not os.path.isdir(train_dir):
@@ -87,7 +76,7 @@ def create_dataset(
     ctr = 0
     for idx in trange(train_size + val_size + test_size):
         x = torch.FloatTensor(4, N).uniform_(0, 1)
-        if sl or idx >= train_size:
+        if idx >= train_size:
             x_ = x.numpy()
             # compute reward matrix C to maximize
             C = np.zeros((N,N))
@@ -97,17 +86,17 @@ def create_dataset(
                 # Find the optimal matching
             max_matching = linear_assignment(-C)
             weight = np.sum(C[max_matching[:,0], max_matching[:,1]])                
-            if idx < train_size and (only == -1 or only == 0):
+            if idx < train_size and (make == 'all' or make == 'train'):
                 sample = to_string(x, (max_matching[:,1], weight))
                 fp = open(os.path.join(train_dir, '{}.txt'.format(ctr)), 'w')
                 fp.write(sample)
                 fp.close()
-            elif idx < train_size + val_size and (only == -1 or only == 1):
+            elif idx < train_size + val_size and (make == 'all' or make == 'val'):
                 sample = to_string(x, (max_matching[:,1], weight))
                 fp = open(os.path.join(val_dir, '{}.txt'.format(ctr - train_size)), 'w')
                 fp.write(sample)
                 fp.close()               
-            elif idx < train_size + val_size + test_size and (only == -1 or only == 2):
+            elif idx < train_size + val_size + test_size and (make == 'all' or make == 'test'):
                 sample = to_string(x, (max_matching[:,1], weight))
                 fp = open(os.path.join(test_dir, '{}.txt'.format(ctr - (train_size + val_size))), 'w')
                 fp.write(sample)
@@ -122,12 +111,10 @@ def create_dataset(
 
 class MWM2DDataset(Dataset):
 
-    def __init__(self, data_dir, size, has_labels=False, sl=False):
+    def __init__(self, data_dir, size):
         super(MWM2DDataset, self).__init__()
-        self.has_labels = has_labels
         self.data_dir = data_dir
         self.size = size
-        self.sl = sl
 
     def __len__(self):
         return self.size
@@ -144,23 +131,15 @@ class MWM2DDataset(Dataset):
                 for ii, tok in enumerate(toks):
                     if ii < N and ctr < N:
                         graph[(int(ctr / 2) * N) + ii, ctr % 2] = float(tok)
-                    elif self.has_labels and ii < 2 * N:
+                    elif ii < 2 * N:
                         matching[int(ii % N)] = float(tok)
-                    elif self.has_labels:
+                    else:
                         labels.append((matching, float(tok)))
-        if self.has_labels:
             return {'x': graph, 'matching': labels[0][0], 'weight': labels[0][1]}
-        else:
-            return graph
     
     def get_average_optimal_weight(self):
         opt = []
-        #assert not self.has_labels
-        if not self.sl:
-            self.has_labels = True
         for i in tqdm(range(self.__len__())):
             sample = self.__getitem__(i)
             opt.append(sample['weight'])
-        if not self.sl:
-            self.has_labels = False
         return np.mean(opt)
