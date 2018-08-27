@@ -119,7 +119,7 @@ class MWM2DDataset(Dataset):
     def __len__(self):
         return self.size
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx, include_weight=False):
         with open(os.path.join(self.data_dir, '{}.txt'.format(idx)), 'r') as dset:
             lines = dset.readlines()
             N = len(lines[0].split())
@@ -135,11 +135,15 @@ class MWM2DDataset(Dataset):
                         matching[int(ii % N)] = float(tok)
                     else:
                         labels.append((matching, float(tok)))
-            return {'x': graph, 'matching': labels[0][0], 'weight': labels[0][1]}
+            if include_weight:
+                return {'x': graph, 'weight': labels[0][1]}
+            else:
+                return graph
+
     
     def get_average_optimal_weight(self):
         opt = []
         for i in tqdm(range(self.__len__())):
-            sample = self.__getitem__(i)
+            sample = self.__getitem__(i, include_weight=True)
             opt.append(sample['weight'])
         return np.mean(opt)

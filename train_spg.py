@@ -59,7 +59,7 @@ parser.add_argument('--epsilon_decay_step', type=int, default=500000)
 parser.add_argument('--embedding_dim', type=int, default=128)
 parser.add_argument('--rnn_dim', type=int, default=128)
 parser.add_argument('--bidirectional', type=spg_utils.str2bool, default=True)
-parser.add_argument('--entropy_coeff', type=float, default=1e-2)
+parser.add_argument('--entropy_coeff', type=float, default=0)
 
 # Training cfg options here
 parser.add_argument('--n_epochs', type=int, default=10)
@@ -68,7 +68,8 @@ parser.add_argument('--max_grad_norm', type=float, default=1.0, help='Gradient c
 parser.add_argument('--buffer_size', type=int, default=1e6)
 parser.add_argument('--log_step', type=int, default=100, help='Log info every log_step steps')
 parser.add_argument('--disable_critic_aux_loss', type=spg_utils.str2bool, default=False)
-parser.add_argument('--actor_workers', type=int, default=4)
+# TODO: remove this
+parser.add_argument('--actor_workers', type=int, default=0)
 # CUDA
 parser.add_argument('--use_cuda', type=spg_utils.str2bool, default=True)
 parser.add_argument('--cuda_device', type=int, default=0)
@@ -86,7 +87,7 @@ parser.add_argument('--disable_tensorboard', type=spg_utils.str2bool, default=Tr
 parser.add_argument('--disable_progress_bar', type=spg_utils.str2bool, default=False)
 parser.add_argument('--_id', type=str, default='123456789', help='FGLab experiment ID')
 parser.add_argument('--num_workers', type=int, default=4)
-parser.add_argument('--make_datasets', type=str, default='all')
+parser.add_argument('--make_datasets', type=str, default='None')
 
 
 Experience = namedtuple('Experience', ['state', 'action', 'reward'])
@@ -366,17 +367,16 @@ def train_model(args):
                 
                 critic_optim.zero_grad()                
                 actor_optim.zero_grad()
-                soft_action, soft_action_reg = actor(s_batch, forward_pass=False)
+                soft_action, _ = actor(s_batch, forward_pass=False)
                 #soft_action = actor(s_batch, forward_pass=False)
                 # N.B. we use the action just computed from the actor net here, which 
                 # will be used to compute the actor gradients
                 # compute gradient of critic network w.r.t. actions, grad Q_a(s,a)
                 soft_critic_out = critic(s_batch, soft_action).squeeze(2).mean()
                 # Compute the consistency regularization term
-                #kl = spg_utils.kullback_leibler(soft_action, soft_action_reg.detach())
                 hpq = spg_utils.entropy(soft_action, soft_action)
-                actor_loss = -soft_critic_out + (args['entropy_coeff'] * hpq)
-                #actor_loss = -soft_critic_out
+                #actor_loss = -soft_critic_out + (args['entropy_coeff'] * hpq)
+                actor_loss = -soft_critic_out
                 actor_loss.backward()
 
                 # clip gradient norms
@@ -390,7 +390,6 @@ def train_model(args):
                     log_value('actor loss', actor_loss.data[0], train_step)
                     log_value('critic loss', critic_out.data[0], train_step)
                     log_value('avg hard Q', hard_Q.mean().data[0], train_step)
-                    #log_value('kl', kl.data[0], train_step)
                     log_value('hpq', hpq.data[0], train_step)
                     if not args['disable_critic_aux_loss']:
                         log_value('avg soft Q', soft_Q.mean().data[0], train_step)

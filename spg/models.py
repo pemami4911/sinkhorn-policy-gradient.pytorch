@@ -388,7 +388,7 @@ class SPGMatchingCriticV2(nn.Module):
         self._input.data.pin_memory()
         if cuda:
             self._init_hx = self._init_hx.cuda()
-            self._byte_mask = self.byte_mask.cuda()
+            self._byte_mask = self._byte_mask.cuda()
             self._input = self._input.cuda(async=True)
 
     def cuda_after_load(self):

@@ -1,5 +1,5 @@
 #!/bin/bash
-N_NODES=25
+N_NODES=15
 MAX_N_NODES=50
 N_FEATURES=2
 COP="mwm2D_$N_NODES"

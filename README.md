@@ -10,13 +10,19 @@ SPG is an off-policy actor-critic deterministic policy gradient algorithm. It ca
 
 ## Dependencies
 
-* [PyTorch](https://pytorch.org)
-    * Tested with versions 0.2 with cuda80 and 0.3.1 with cuda90
+* [PyTorch 0.4](https://pytorch.org)
 * h5py
 * tqdm
 * tensorboard_logger
 * pathos
 * scikit-learn (0.19.1)
+* cython
+
+## Build
+
+To compile the cython code for the Hungarian algorithm, run
+
+    ```python setup.py build_ext --inplace; mv build/ spg/; mv *.so spg/```
 
 ## Data
 
@@ -27,9 +33,9 @@ For sorting and Euclidean TSP, a train and test dataset will automatically be cr
 
 ## Running the experiments
 
-To run an experiment, modify the variables in the `run_spg.sh` or `run_nco.sh` file. I prefer this extra layer around `argparse` so you don't have to deal with typing the long list of command line arguments. I will briefly explain the important variables here.
+Scripts for training and evaluating models are in the `scripts/` directory. To run an experiment, modify the variables in the `run_spg.sh` or `run_pnac.sh` file. I prefer this extra layer around `argparse` so you don't have to deal with typing the long list of command line arguments. I will briefly explain the important variables here.
 
-N.B. I have `--_id` set up with argparse for [FGMachine](https://github.com/Kaixhin/FGMachine).
+n.b. I have `--_id` set up with argparse for [FGMachine](https://github.com/Kaixhin/FGMachine).
 
 ### SPG (run_spg.sh)
 * `N_NODES` Sets the problem size.
@@ -49,7 +55,7 @@ N.B. I have `--_id` set up with argparse for [FGMachine](https://github.com/Kaix
 * `SAVE_STATS` Store rewards to a h5py file and store test scores to a json file for [FGLab](https://kaixhin.github.io/FGLab/).
 * `SAVE_MODEL` Save model weights after each epoch.
 * `BASE_DIR` The directory where logs, models, fglab results, etc. will be saved.
-* `MAKE_ONLY` [mwm2D] `-1` make all `0` only train `1` only test `2` only val `3` make none (default)
+* `MAKE_DATASETS` For creating more data for sorting, mwm2D, or E-TSP. ['None', 'all', 'train', 'val', 'test']
 
 #### SPG Examples
 
